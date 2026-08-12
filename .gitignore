@@ -13,6 +13,7 @@ checkpoints/
 
 # tooling
 .DS_Store
+.vscode/
 .ipynb_checkpoints/
 *.egg-info/
 dist/

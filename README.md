@@ -32,6 +32,17 @@ and watched while it runs. The opposite of a black box.
 - [ ] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
 
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+pytest tests/ -q              # 18 behavioural tests
+python scripts/sanity_check.py  # untrained forward pass, shapes and loss
+```
+
 ## Layout
 
 ```

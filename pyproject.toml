@@ -5,6 +5,7 @@ description = "A language model you can see inside — GPT from first principles
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.2",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
