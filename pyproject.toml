@@ -1,0 +1,18 @@
+[project]
+name = "glassbox"
+version = "0.1.0"
+description = "A language model you can see inside — GPT from first principles in pure PyTorch, grown into a modern architecture with a from-scratch BPE tokenizer, LoRA, and an attention visualizer."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["glassbox*"]
