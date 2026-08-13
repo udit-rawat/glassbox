@@ -19,9 +19,10 @@ and watched while it runs. The opposite of a black box.
 
 ## Progress
 
-- [ ] **Phase 1 — Attention & the Transformer.** Scaled dot-product
+- [x] **Phase 1 — Attention & the Transformer.** Scaled dot-product
   attention, multi-head attention, causal masking, a full GPT-style
   decoder trained char-level on Tiny Shakespeare.
+  *2.7M parameters, validation loss 4.17 → 1.50, ~16 min on an M1.*
 - [ ] **Phase 2 — Modern LLM internals.** RMSNorm, RoPE, SwiGLU, grouped
   query attention, KV cache, temperature/top-k/top-p sampling, and a BPE
   tokenizer from scratch.
@@ -31,6 +32,46 @@ and watched while it runs. The opposite of a black box.
   scratch (~80 lines), then instruction-tuning a real pretrained model.
 - [ ] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
+
+## Phase 1 result
+
+A 2.7M-parameter decoder trained from scratch on Tiny Shakespeare, character
+level, on an M1 laptop. Validation loss falls from 4.17 — the loss of a uniform
+guess over 65 characters — to 1.50 in about sixteen minutes.
+
+```
+iter   500  train 2.0469  val 2.1112
+iter  1500  train 1.5135  val 1.7014
+iter  2500  train 1.3899  val 1.5871
+iter  3500  train 1.3198  val 1.5430
+iter  5000  train 1.2703  val 1.4990
+```
+
+Sampled at temperature 0.8, top-k 40, from the prompt `ROMEO:`:
+
+```
+ROMEO:
+O, my lord, that I will fear:
+Seal I hard not sent daughter, I know not what I live you mock:
+I know not into your own city, and you be so passed
+But, no sir, and no man as not resolved
+Might have menDed man's study flesh eyes.
+
+POMPEY:
+Men in the maid of hope may be gone of her with her
+my husband
+```
+
+Nothing here was given to the model: not that speakers are capitalised and
+followed by a colon, not that lines break where they do, not a single English
+word. It learned all of it from raw characters and next-character prediction.
+The grammar is local and the meaning does not survive a full sentence, which is
+exactly what 2.7M parameters at character level buys.
+
+```bash
+python scripts/train_shakespeare.py --max-iters 5000 --lr 1e-3
+python scripts/sample.py --prompt "ROMEO:" --temperature 0.8 --top-k 40
+```
 
 ## Setup
 
@@ -49,10 +90,11 @@ python scripts/sanity_check.py  # untrained forward pass, shapes and loss
 glassbox/
 ├── model/       # attention, blocks, the GPT — evolves Phase 1 → 2
 ├── tokenizer/   # char-level, then BPE from scratch
-├── training/    # loop, schedule, checkpointing
-├── sampling/    # greedy → temperature / top-k / top-p
+├── training/    # corpus, batching, the training loop
+├── sampling/    # greedy, temperature, top-k, top-p
 └── viz/         # the attention visualizer
-tests/           # behavioral tests: causality, invariants, shapes
+scripts/         # train, sample, sanity check
+tests/           # behavioural tests: causality, invariants, shapes
 notes/           # per-module notes: what it does and why it exists
 ```
 
