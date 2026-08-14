@@ -25,6 +25,14 @@ def main() -> None:
     p.add_argument("--n-heads", type=int, default=6)
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--lr", type=float, default=3e-4)
+    # Architecture switches. Defaults reproduce Phase 1, so the same command
+    # with and without these flags is a controlled comparison.
+    p.add_argument("--norm", choices=["layernorm", "rmsnorm"], default="layernorm")
+    p.add_argument("--activation", choices=["gelu", "swiglu"], default="gelu")
+    p.add_argument("--pos-encoding", choices=["learned", "rope"], default="learned")
+    p.add_argument("--n-kv-heads", type=int, default=None)
+    p.add_argument("--no-bias", action="store_true")
+    p.add_argument("--out-dir", type=str, default="checkpoints")
     p.add_argument("--eval-interval", type=int, default=250)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--sample-tokens", type=int, default=500)
@@ -44,14 +52,21 @@ def main() -> None:
         n_layers=args.n_layers,
         n_heads=args.n_heads,
         dropout=args.dropout,
+        norm=args.norm,
+        activation=args.activation,
+        pos_encoding=args.pos_encoding,
+        n_kv_heads=args.n_kv_heads,
+        bias=not args.no_bias,
     )
     model = GPT(config)
 
     print(f"device      {device}")
     print(f"corpus      {len(text):,} chars, vocab {tokenizer.vocab_size}")
     print(f"split       {len(dataset.train):,} train / {len(dataset.val):,} val")
+    print(f"arch        {config.norm} / {config.activation} / {config.pos_encoding} "
+          f"/ kv_heads {config.n_kv_heads}")
     print(f"parameters  {model.num_parameters():,}")
-    print()
+    print(flush=True)
 
     train_cfg = TrainConfig(
         max_iters=args.max_iters,
