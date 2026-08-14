@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from glassbox.model.config import GPTConfig
+from glassbox.model.rope import apply_rope, build_rope_cache
 
 
 def causal_mask(seq_len: int, device=None) -> torch.Tensor:
@@ -53,21 +54,42 @@ def scaled_dot_product_attention(
     return mixture @ v, weights
 
 
+def repeat_kv(x: torch.Tensor, n_groups: int) -> torch.Tensor:
+    """Expand n_kv_heads up to n_heads by repeating each key/value head in place."""
+    if n_groups == 1:
+        return x
+    # repeat_interleave rather than repeat: head i must land on the contiguous
+    # block of query heads assigned to it. Tiling the whole tensor instead would
+    # pair query heads with the wrong key/value heads while keeping every shape
+    # correct, which is exactly the kind of bug that survives a test suite that
+    # only checks shapes.
+    return x.repeat_interleave(n_groups, dim=1)
+
+
 class MultiHeadAttention(nn.Module):
     """Runs h attention heads over disjoint slices of the embedding, in parallel."""
 
     def __init__(self, config: GPTConfig):
         super().__init__()
+        self.config = config
         self.n_heads = config.n_heads
+        self.n_kv_heads = config.n_kv_heads
+        self.n_kv_groups = config.n_kv_groups
         self.d_head = config.d_head
+        self.use_rope = config.pos_encoding == "rope"
 
-        # Separate q/k/v projections rather than one fused matrix. A fused qkv
-        # is marginally faster, but grouped query attention in Phase 2 gives k
-        # and v a smaller output width than q, which a single fused matrix
-        # cannot express without slicing tricks.
-        self.q_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
-        self.k_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
-        self.v_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
+        # Separate q/k/v projections rather than one fused matrix. Under grouped
+        # query attention k and v produce fewer heads than q, so their output
+        # width genuinely differs and a single fused matrix could not express it.
+        self.q_proj = nn.Linear(
+            config.d_model, config.n_heads * config.d_head, bias=config.bias
+        )
+        self.k_proj = nn.Linear(
+            config.d_model, config.n_kv_heads * config.d_head, bias=config.bias
+        )
+        self.v_proj = nn.Linear(
+            config.d_model, config.n_kv_heads * config.d_head, bias=config.bias
+        )
         self.out_proj = nn.Linear(config.d_model, config.d_model, bias=config.bias)
 
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -81,19 +103,40 @@ class MultiHeadAttention(nn.Module):
             "causal", causal_mask(config.block_size), persistent=False
         )
 
+        if self.use_rope:
+            cos, sin = build_rope_cache(
+                config.block_size, config.d_head, config.rope_theta
+            )
+            self.register_buffer("rope_cos", cos, persistent=False)
+            self.register_buffer("rope_sin", sin, persistent=False)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         B, T, C = x.shape
 
-        # (B, T, C) -> (B, n_heads, T, d_head). The transpose puts the head axis
+        # (B, T, n*d_head) -> (B, n, T, d_head). The transpose puts the head axis
         # next to the batch axis so the matmuls inside attention treat heads as
         # independent batch elements; nothing is shared between them until
         # out_proj mixes them back together.
-        def split_heads(t: torch.Tensor) -> torch.Tensor:
-            return t.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
+        def split(t: torch.Tensor, n: int) -> torch.Tensor:
+            return t.view(B, T, n, self.d_head).transpose(1, 2)
 
-        q = split_heads(self.q_proj(x))
-        k = split_heads(self.k_proj(x))
-        v = split_heads(self.v_proj(x))
+        q = split(self.q_proj(x), self.n_heads)
+        k = split(self.k_proj(x), self.n_kv_heads)
+        v = split(self.v_proj(x), self.n_kv_heads)
+
+        if self.use_rope:
+            # Rotation is applied to queries and keys only, never to values.
+            # Position enters through which positions match each other, not
+            # through the content that gets passed along once they do.
+            cos, sin = self.rope_cos[:T], self.rope_sin[:T]
+            q = apply_rope(q, cos, sin)
+            k = apply_rope(k, cos, sin)
+
+        # Grouped query attention stores fewer key/value heads than query heads
+        # and expands them here. The saving is real at generation time, where
+        # the KV cache shrinks by this factor; during training it is a wash.
+        k = repeat_kv(k, self.n_kv_groups)
+        v = repeat_kv(v, self.n_kv_groups)
 
         attended, weights = scaled_dot_product_attention(
             q, k, v, mask=self.causal[:T, :T], dropout=self.attn_dropout

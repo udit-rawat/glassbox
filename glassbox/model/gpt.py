@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from glassbox.model.blocks import TransformerBlock
 from glassbox.model.config import GPTConfig
+from glassbox.model.norm import build_norm
 
 
 class GPT(nn.Module):
@@ -16,18 +17,23 @@ class GPT(nn.Module):
         self.config = config
 
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
+
         # Attention is permutation-invariant: shuffle the input positions and
         # the same set of outputs comes back shuffled. Order has to be injected,
-        # and a learned per-position vector is the cheapest way to do it. The
-        # cost is a hard context ceiling at block_size, which is exactly what
-        # RoPE removes in Phase 2.
-        self.position_embedding = nn.Embedding(config.block_size, config.d_model)
+        # and a learned per-position vector is the cheapest way to do it. RoPE
+        # injects it inside attention instead, rotating queries and keys, so
+        # this table is not built at all in that configuration.
+        self.position_embedding = (
+            nn.Embedding(config.block_size, config.d_model)
+            if config.pos_encoding == "learned"
+            else None
+        )
         self.dropout = nn.Dropout(config.dropout)
 
         self.blocks = nn.ModuleList(
             TransformerBlock(config) for _ in range(config.n_layers)
         )
-        self.ln_f = nn.LayerNorm(config.d_model, bias=config.bias)
+        self.ln_f = build_norm(config, config.d_model)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
         # Weight tying: the matrix that maps a token id to a vector is reused,
@@ -72,11 +78,14 @@ class GPT(nn.Module):
         if T > self.config.block_size:
             raise ValueError(
                 f"sequence length {T} exceeds block_size {self.config.block_size}; "
-                "learned position embeddings exist only up to block_size"
+                "position information is only defined up to block_size"
             )
 
-        pos = torch.arange(T, device=idx.device)
-        x = self.dropout(self.token_embedding(idx) + self.position_embedding(pos))
+        x = self.token_embedding(idx)
+        if self.position_embedding is not None:
+            pos = torch.arange(T, device=idx.device)
+            x = x + self.position_embedding(pos)
+        x = self.dropout(x)
 
         # Attention maps are collected per layer only when asked for. Holding
         # every layer's (B, n_heads, T, T) tensor is quadratic in sequence
@@ -107,7 +116,9 @@ class GPT(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         if not include_embeddings:
             # lm_head is tied to token_embedding and so is not double counted by
-            # parameters(); only the position table is a separate tensor.
-            total -= self.position_embedding.weight.numel()
+            # parameters(); only the position table is a separate tensor, and
+            # under RoPE it does not exist at all.
+            if self.position_embedding is not None:
+                total -= self.position_embedding.weight.numel()
             total -= self.token_embedding.weight.numel()
         return total
