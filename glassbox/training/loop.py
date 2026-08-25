@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 
+from glassbox.tokenizer.spec import tokenizer_spec
 from glassbox.training.data import CharDataset
 from glassbox.training.precision import select_precision
 from glassbox.training.schedule import constant, cosine_with_warmup
@@ -28,6 +29,12 @@ class TrainConfig:
 
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+    # Adam's moment decay rates, named here rather than buried in the optimizer
+    # call. The default reproduces Phase 1, following the same rule as the
+    # architecture switches: nothing changes behaviour unless it is asked for.
+    # 0.95 is the GPT-3 and Llama value and is the right choice at larger scale,
+    # but on this model it measured 0.024 worse — so it is opt-in, not assumed.
+    betas: tuple[float, float] = (0.9, 0.99)
 
     eval_interval: int = 250
     eval_iters: int = 50
@@ -46,13 +53,6 @@ def _lr_for(it: int, cfg: TrainConfig) -> float:
             it, cfg.learning_rate, cfg.warmup_iters, cfg.max_iters, cfg.min_lr_ratio
         )
     return constant(it, cfg.learning_rate)
-
-
-def _tokenizer_spec(tokenizer) -> dict:
-    """A self-describing record of the tokenizer, stored inside the checkpoint."""
-    if hasattr(tokenizer, "merge_list"):
-        return {"kind": "bpe", "merges": [list(m) for m in tokenizer.merge_list]}
-    return {"kind": "char", "chars": list(tokenizer.chars)}
 
 
 @torch.no_grad()
@@ -92,7 +92,7 @@ def build_optimizer(model, cfg: TrainConfig) -> torch.optim.Optimizer:
             {"params": no_decay, "weight_decay": 0.0},
         ],
         lr=cfg.learning_rate,
-        betas=(0.9, 0.95),
+        betas=cfg.betas,
     )
 
 
@@ -127,7 +127,7 @@ def train(model, dataset: CharDataset, cfg: TrainConfig, device) -> TrainConfig:
         cfg.history = ckpt.get("history", [])
         print(f"resumed from iter {ckpt['iter']}, best val {best_val:.4f}", flush=True)
 
-    tok_spec = _tokenizer_spec(dataset.tokenizer)
+    tok_spec = tokenizer_spec(dataset.tokenizer)
     effective_batch = cfg.batch_size * cfg.grad_accum_steps
     print(
         f"precision   {precision.describe()}   "
