@@ -8,7 +8,7 @@ for the same sequence length.
 
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 # Text is split on this before any merging, and merges never cross a chunk
@@ -75,32 +75,59 @@ class BPETokenizer:
         # words are collapsed into one entry with a frequency instead, so the
         # work scales with the vocabulary of the corpus rather than its length.
         word_freqs = Counter(SPLIT_PATTERN.findall(text))
-        words = {
-            word: tuple(word.encode("utf-8")) for word in word_freqs
-        }
+        words = {word: tuple(word.encode("utf-8")) for word in word_freqs}
+
+        # Counts are maintained incrementally rather than recomputed. Rebuilding
+        # them each merge means walking every symbol of every word thousands of
+        # times: on a corpus with 100k distinct words and 4k merges that is
+        # billions of operations, and the difference between minutes and hours.
+        # `where` maps each pair to the words containing it, so a merge only has
+        # to touch the words it actually appears in.
+        counts: Counter = Counter()
+        where: dict[tuple[int, int], set[str]] = defaultdict(set)
+        for word, symbols in words.items():
+            freq = word_freqs[word]
+            for pair in zip(symbols, symbols[1:]):
+                counts[pair] += freq
+                where[pair].add(word)
 
         merges: list[tuple[int, int, int]] = []
         for i in range(vocab_size - 256):
-            counts: Counter = Counter()
-            for word, symbols in words.items():
-                if len(symbols) >= 2:
-                    _pair_counts(symbols, counts, word_freqs[word])
-
             if not counts:
                 # The corpus ran out of adjacent pairs before the target size.
                 break
 
-            pair, freq = counts.most_common(1)[0]
+            # The pair itself breaks ties, so the outcome never depends on dict
+            # ordering. Without that, two runs over the same corpus could choose
+            # differently among equally frequent pairs.
+            pair = max(counts, key=lambda p: (counts[p], p))
+            freq = counts[pair]
             if freq < 2:
                 # Merging a pair that occurs once trades a vocabulary slot for
                 # nothing; every later merge would be worth even less.
                 break
 
             new_id = 256 + i
-            words = {
-                word: _merge(symbols, pair, new_id) if len(symbols) >= 2 else symbols
-                for word, symbols in words.items()
-            }
+            for word in list(where[pair]):
+                symbols = words[word]
+                weight = word_freqs[word]
+
+                # Withdraw this word's old pairs, apply the merge, then add its
+                # new ones back. Everything it contributed changes, because a
+                # merge shifts the neighbours on both sides of the pair too.
+                for p in zip(symbols, symbols[1:]):
+                    counts[p] -= weight
+                    if counts[p] <= 0:
+                        del counts[p]
+                    where[p].discard(word)
+
+                merged = _merge(symbols, pair, new_id)
+                words[word] = merged
+
+                for p in zip(merged, merged[1:]):
+                    counts[p] += weight
+                    where[p].add(word)
+
             merges.append((pair[0], pair[1], new_id))
 
             if verbose and (i + 1) % 500 == 0:
