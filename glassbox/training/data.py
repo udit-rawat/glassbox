@@ -11,13 +11,43 @@ TINY_SHAKESPEARE_URL = (
     "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 )
 
+# TinyStories is fetched as two plain text files over HTTP. The dataset happens
+# to be hosted on the HuggingFace CDN, but nothing here imports their libraries —
+# this is the same urlretrieve used for Shakespeare, and the "no HuggingFace
+# until Phase 4" rule is about not leaning on their abstractions, not about
+# refusing to download a file.
+TINYSTORIES_TRAIN_URL = (
+    "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt"
+)
+TINYSTORIES_VALID_URL = (
+    "https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-valid.txt"
+)
 
-def download_tiny_shakespeare(path: str | Path = "data/tinyshakespeare.txt") -> Path:
+
+def download(url: str, path: str | Path) -> Path:
+    """Fetch a URL to a path, skipping the download if it is already there."""
     path = Path(path)
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(TINY_SHAKESPEARE_URL, path)
+        # Written to a temporary name first, so an interrupted download cannot
+        # leave a truncated file that later runs mistake for a complete one.
+        tmp = path.with_suffix(path.suffix + ".part")
+        urllib.request.urlretrieve(url, tmp)
+        tmp.rename(path)
     return path
+
+
+def download_tiny_shakespeare(path: str | Path = "data/tinyshakespeare.txt") -> Path:
+    return download(TINY_SHAKESPEARE_URL, path)
+
+
+def download_tinystories(data_dir: str | Path = "data/tinystories") -> tuple[Path, Path]:
+    """Fetch the TinyStories train and validation text. Train is roughly 1.9 GB."""
+    data_dir = Path(data_dir)
+    return (
+        download(TINYSTORIES_TRAIN_URL, data_dir / "train.txt"),
+        download(TINYSTORIES_VALID_URL, data_dir / "valid.txt"),
+    )
 
 
 class CharDataset:
