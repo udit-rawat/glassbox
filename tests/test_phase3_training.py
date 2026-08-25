@@ -79,6 +79,34 @@ def test_cpu_and_mps_fall_back_to_fp32():
         assert not select_precision(torch.device(dev), enabled=True).enabled
 
 
+def test_ampere_and_later_get_bfloat16_without_a_scaler(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: (8, 0))
+    p = select_precision(torch.device("cuda"), enabled=True)
+    assert p.dtype is torch.bfloat16
+    assert not p.use_scaler
+
+
+def test_turing_gets_float16_and_a_scaler(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: (7, 5))
+    p = select_precision(torch.device("cuda"), enabled=True)
+    assert p.dtype is torch.float16
+    assert p.use_scaler
+
+
+def test_emulated_bfloat16_is_not_mistaken_for_hardware(monkeypatch):
+    """The regression: a T4 reported bf16 support and would have used it.
+
+    torch.cuda.is_bf16_supported() includes emulation by default, and its
+    fallback only checks that a bf16 tensor can be allocated — true on any card,
+    since bf16 is a storage format. Trusting it selects a dtype that Turing
+    computes in software, which is slower than the fp16 its tensor cores were
+    built for.
+    """
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device=None: (7, 5))
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: True)
+    assert select_precision(torch.device("cuda"), enabled=True).dtype is torch.float16
+
+
 def test_scaler_is_only_used_with_float16():
     # bfloat16 carries float32's exponent range so it cannot overflow; fp16 can,
     # and needs the loss scaled up before the backward pass.

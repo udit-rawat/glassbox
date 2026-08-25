@@ -29,11 +29,18 @@ def select_precision(device: torch.device, enabled: bool = True) -> Precision:
 
     if device.type == "cuda":
         # bfloat16 carries the same exponent range as float32, so values never
-        # overflow and no loss scaling is needed. Only Ampere and later have it;
-        # a T4 is Turing, and there fp16 is the option — which does overflow, so
-        # a gradient scaler has to multiply the loss up before the backward pass
-        # and divide it back out before the step.
-        if torch.cuda.is_bf16_supported():
+        # overflow and no loss scaling is needed. Only Ampere and later have the
+        # tensor cores for it; on Turing fp16 is the option — which does
+        # overflow, so a gradient scaler has to multiply the loss up before the
+        # backward pass and divide it back out before the step.
+        #
+        # Compute capability is the test, not torch.cuda.is_bf16_supported().
+        # That helper defaults to including emulation, and its fallback merely
+        # allocates a bf16 tensor — which succeeds on any card, because bf16 is
+        # a storage format rather than a capability. It answers "can this device
+        # hold bf16?" while the question here is "can it compute in bf16 fast?".
+        # On a T4 it returns True and the arithmetic is emulated in software.
+        if torch.cuda.get_device_capability(device)[0] >= 8:
             return Precision("cuda", torch.bfloat16, False)
         return Precision("cuda", torch.float16, True)
 
