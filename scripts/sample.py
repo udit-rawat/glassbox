@@ -10,7 +10,7 @@ import torch
 from glassbox.device import get_device
 from glassbox.model import GPT
 from glassbox.sampling.generate import generate
-from glassbox.tokenizer.char import CharTokenizer
+from glassbox.tokenizer.spec import load_tokenizer_from_checkpoint
 
 
 def main() -> None:
@@ -34,12 +34,22 @@ def main() -> None:
     # scripts/train_shakespeare.py and never downloaded.
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
 
-    tokenizer = CharTokenizer(ckpt["chars"])
+    # Read whichever tokenizer the checkpoint was trained with rather than
+    # assuming characters — a BPE checkpoint carries merges and no character
+    # list, and hardcoding one kind here breaks silently on the other.
+    tokenizer = load_tokenizer_from_checkpoint(ckpt)
+
     model = GPT(ckpt["model_config"])
     model.load_state_dict(ckpt["model"])
     model.to(device).eval()
 
+    cfg = ckpt["model_config"]
     print(f"checkpoint  iter {ckpt['iter']}, val loss {ckpt['val_loss']:.4f}")
+    print(
+        f"arch        {cfg.norm} / {cfg.activation} / {cfg.pos_encoding} "
+        f"/ kv_heads {cfg.n_kv_heads}"
+    )
+    print(f"tokenizer   {type(tokenizer).__name__}, vocab {tokenizer.vocab_size}")
     print(f"sampling    temp {args.temperature}, top_k {args.top_k}, top_p {args.top_p}\n")
 
     idx = torch.tensor([tokenizer.encode(args.prompt)], dtype=torch.long, device=device)
