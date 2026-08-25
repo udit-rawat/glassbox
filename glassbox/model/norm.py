@@ -7,14 +7,15 @@ import torch.nn as nn
 class RMSNorm(nn.Module):
     """Scales each position by its own root-mean-square, then applies a learned gain."""
 
-    def __init__(self, d_model: int, eps: float = 1e-6, bias: bool = False):
+    def __init__(self, d_model: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(d_model))
-        # No learned shift. LayerNorm's beta pairs with the mean subtraction it
-        # performs; with no centering there is nothing for a shift to re-centre,
-        # and every published RMSNorm leaves it out.
-        self.bias = nn.Parameter(torch.zeros(d_model)) if bias else None
+        # There is deliberately no learned shift, and no option to add one.
+        # LayerNorm's beta exists to undo its mean subtraction; RMSNorm performs
+        # no subtraction, so a shift would be re-centring something that was
+        # never centred. Every published RMSNorm omits it, and making it
+        # configurable would only invite a nonstandard module by accident.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # LayerNorm subtracts the mean, then divides by the standard deviation.
@@ -27,13 +28,13 @@ class RMSNorm(nn.Module):
         # the statistic is always computed in float32 and cast back afterwards.
         x_f = x.float()
         rms = torch.rsqrt(x_f.pow(2).mean(-1, keepdim=True) + self.eps)
-        out = (x_f * rms).to(dtype) * self.weight
-
-        return out + self.bias if self.bias is not None else out
+        return (x_f * rms).to(dtype) * self.weight
 
 
 def build_norm(config, d_model: int) -> nn.Module:
     """Pick the normalization named by the config."""
     if config.norm == "rmsnorm":
-        return RMSNorm(d_model, bias=config.bias)
+        # config.bias governs the linear projections, not this. RMSNorm having
+        # no shift is part of what RMSNorm is, so the flag does not reach here.
+        return RMSNorm(d_model)
     return nn.LayerNorm(d_model, bias=config.bias)

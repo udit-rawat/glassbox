@@ -43,6 +43,15 @@ class CharDataset:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         data = self.train if split == "train" else self.val
 
+        if len(data) <= block_size:
+            # torch.randint raises an opaque error when its upper bound is not
+            # positive, and the real cause — a corpus too small for the context
+            # length — is nowhere in that message.
+            raise ValueError(
+                f"the {split} split holds {len(data)} tokens but block_size is "
+                f"{block_size}; no window of that length can be cut from it"
+            )
+
         # Windows are drawn at uniformly random offsets rather than marched
         # through in order. One "epoch" has no meaning here: the corpus is a
         # single stream, and sampling independently means consecutive batches
