@@ -23,15 +23,63 @@ and watched while it runs. The opposite of a black box.
   attention, multi-head attention, causal masking, a full GPT-style
   decoder trained char-level on Tiny Shakespeare.
   *2.7M parameters, validation loss 4.17 → 1.50, ~16 min on an M1.*
-- [ ] **Phase 2 — Modern LLM internals.** RMSNorm, RoPE, SwiGLU, grouped
-  query attention, KV cache, temperature/top-k/top-p sampling, and a BPE
-  tokenizer from scratch.
-- [ ] **Phase 3 — A real training run.** TinyStories with mixed precision,
+- [x] **Phase 2 — Modern LLM internals.** RMSNorm, RoPE, SwiGLU, grouped
+  query attention, temperature/top-k/top-p sampling, and a BPE tokenizer
+  from scratch.
+  *Same data, same seed: validation loss 1.4813 against Phase 1's 1.4990,
+  with 12% fewer parameters. KV cache still outstanding.*
+- [x] **Phase 3 — A real training run.** TinyStories with mixed precision,
   gradient accumulation, cosine LR schedule, and crash-safe checkpointing.
+  *11M parameters, 133M tokens, validation loss 1.5787 — perplexity 4.8
+  against a 4,096-token vocabulary. 49 minutes on a T4.*
 - [ ] **Phase 4 — Fine-tuning a real model.** LoRA implemented from
   scratch (~80 lines), then instruction-tuning a real pretrained model.
 - [ ] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
+
+## Phase 3 result — it writes English
+
+An 11M-parameter model, trained from scratch on 133 million tokens of
+TinyStories with a from-scratch BPE tokenizer, in 49 minutes on a free T4.
+Validation loss 1.5787, which is a perplexity of 4.8 against a vocabulary of
+4,096 — the model has narrowed four thousand options down to about five.
+
+Prompted with `The dog was very sad because`, sampled at temperature 0.8 and
+top-p 0.9:
+
+```
+The dog was very sad because he could not be friends with a cat. The cat
+wanted to be friends with the dog, but the dog was too big and strong. So,
+the cat tried to play with the dog. But the dog was too big and the cat
+could not lift it.
+
+The cat found a big tree to sit under. The cat was very happy. The cat and
+the dog became best friends. They played and laughed together every day.
+```
+
+And from `Once upon a time, there was a little`, it produced a complete story
+with two named characters, dialogue, an argument over a toy box, a consequence,
+and a closing line: *"The moral of the story is to not fight and be kind to each
+other."*
+
+Nothing taught it story structure, dialogue punctuation, or that stories end
+with a moral. All of it is a consequence of predicting the next token.
+
+```
+iter    500  train 2.8910  val 2.8883
+iter  5000  train 1.8613  val 1.8735
+iter 10000  train 1.7052  val 1.7308
+iter 15000  train 1.6060  val 1.6222
+iter 20000  train 1.5555  val 1.5787
+```
+
+The train/validation gap is 0.023, so this is undertrained rather than overfit —
+loss was still falling when the schedule ran out.
+
+```bash
+python scripts/prepare_tinystories.py --train-mb 500 --vocab-size 4096
+python scripts/train_tinystories.py --max-iters 20000 --schedule cosine
+```
 
 ## Phase 1 result
 
