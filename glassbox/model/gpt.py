@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from glassbox.model.blocks import TransformerBlock
+from glassbox.model.cache import KVCache
 from glassbox.model.config import GPTConfig
 from glassbox.model.norm import build_norm
 
@@ -72,18 +73,25 @@ class GPT(nn.Module):
         idx: torch.Tensor,
         targets: torch.Tensor | None = None,
         return_attention: bool = False,
+        return_hidden: bool = False,
+        cache: KVCache | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         """(B, T) token ids -> (B, T, vocab_size) logits, optional loss, optional attention."""
         B, T = idx.shape
-        if T > self.config.block_size:
+
+        # With a cache, idx holds only the new tokens; everything before them is
+        # already stored. Position therefore continues from the cache rather
+        # than restarting at zero.
+        start = cache.length if cache is not None else 0
+        if start + T > self.config.block_size:
             raise ValueError(
-                f"sequence length {T} exceeds block_size {self.config.block_size}; "
+                f"position {start + T} exceeds block_size {self.config.block_size}; "
                 "position information is only defined up to block_size"
             )
 
         x = self.token_embedding(idx)
         if self.position_embedding is not None:
-            pos = torch.arange(T, device=idx.device)
+            pos = torch.arange(start, start + T, device=idx.device)
             x = x + self.position_embedding(pos)
         x = self.dropout(x)
 
@@ -92,10 +100,19 @@ class GPT(nn.Module):
         # length, which is affordable for a visualizer call and wasteful for
         # every step of a training run.
         attentions: list[torch.Tensor] | None = [] if return_attention else None
-        for block in self.blocks:
-            x, weights = block(x)
+
+        # The residual stream after every block, plus the embedding that starts
+        # it. Collected only on request: holding n_layers copies of (B, T, C) is
+        # wasted memory on every training step, and the visualizer is the only
+        # thing that reads them.
+        self._hidden = [x] if return_hidden else None
+
+        for i, block in enumerate(self.blocks):
+            x, weights = block(x, cache=cache[i] if cache is not None else None)
             if attentions is not None:
                 attentions.append(weights)
+            if self._hidden is not None:
+                self._hidden.append(x)
 
         x = self.ln_f(x)
         logits = self.lm_head(x)
@@ -111,6 +128,36 @@ class GPT(nn.Module):
             )
 
         return logits, loss, attentions
+
+    def hidden_states(self) -> list[torch.Tensor]:
+        """The residual stream captured by the last forward(return_hidden=True)."""
+        if getattr(self, "_hidden", None) is None:
+            raise RuntimeError(
+                "no hidden states recorded; call forward(..., return_hidden=True) first"
+            )
+        return self._hidden
+
+    @torch.no_grad()
+    def logit_lens(self, idx: torch.Tensor) -> list[torch.Tensor]:
+        """What the model would predict if it stopped at each layer.
+
+        The residual stream is a channel each block writes an increment into, and
+        the output head reads that channel. So the head can be pointed at it
+        early — normalize the stream as it stands after layer L, score it against
+        the vocabulary, and read off the prediction the model has formed so far.
+        Run over every depth it shows a guess sharpening as the layers refine it,
+        which is the clearest picture of what the extra depth is buying.
+
+        Returns n_layers + 1 logit tensors: the bare embedding first, then one
+        after each block.
+        """
+        was_training = self.training
+        self.eval()
+        try:
+            self(idx, return_hidden=True)
+            return [self.lm_head(self.ln_f(h)) for h in self.hidden_states()]
+        finally:
+            self.train(was_training)
 
     def num_parameters(self, include_embeddings: bool = True) -> int:
         total = sum(p.numel() for p in self.parameters())
