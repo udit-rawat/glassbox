@@ -37,7 +37,7 @@ def trained(tmp_path):
 
 def test_optimizer_state_is_dropped(trained, tmp_path):
     dst = tmp_path / "slim.pt"
-    before, after = export(trained, dst)
+    before, after, _ = export(trained, dst)
 
     slim = torch.load(dst, map_location="cpu", weights_only=False)
     assert "optimizer" not in slim
@@ -79,8 +79,8 @@ def test_everything_needed_to_rebuild_survives(trained, tmp_path):
 
 def test_half_precision_export_is_smaller_and_still_loads(trained, tmp_path):
     plain, half = tmp_path / "plain.pt", tmp_path / "half.pt"
-    _, plain_size = export(trained, plain)
-    _, half_size = export(trained, half, half=True)
+    _, plain_size, _ = export(trained, plain)
+    _, half_size, _ = export(trained, half, half=True)
     assert half_size < plain_size
 
     slim = torch.load(half, map_location="cpu", weights_only=False)

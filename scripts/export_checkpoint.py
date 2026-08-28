@@ -26,8 +26,13 @@ KEEP = ("model", "model_config", "tokenizer", "chars", "iter", "val_loss")
 DROP = ("optimizer", "scaler", "history")
 
 
-def export(src: Path, dst: Path, half: bool = False) -> tuple[int, int]:
+def export(src: Path, dst: Path, half: bool = False) -> tuple[int, int, list[str]]:
+    # Loaded once and reused. Reading a 132 MB checkpoint back off a mounted
+    # Drive takes long enough that doing it twice looks like a hang, and there
+    # is nothing in the second read that the first did not already have.
+    print(f"reading {src}", flush=True)
     ckpt = torch.load(src, map_location="cpu", weights_only=False)
+    dropped = [k for k in DROP if k in ckpt]
 
     slim = {k: ckpt[k] for k in KEEP if k in ckpt}
     slim["exported_from"] = str(src)
@@ -40,8 +45,21 @@ def export(src: Path, dst: Path, half: bool = False) -> tuple[int, int]:
                          for k, v in slim["model"].items()}
 
     dst.parent.mkdir(parents=True, exist_ok=True)
+    print(f"writing {dst}", flush=True)
     torch.save(slim, dst)
-    return src.stat().st_size, dst.stat().st_size
+
+    # Verified from the dictionary just written rather than by reading the file
+    # back, which would be a third pass over the network mount.
+    model = GPT(slim["model_config"])
+    model.load_state_dict({k: v.float() for k, v in slim["model"].items()})
+    tokenizer = load_tokenizer_from_checkpoint(slim)
+    print(
+        f"verified    {model.num_parameters():,} params, "
+        f"{type(tokenizer).__name__} vocab {tokenizer.vocab_size}",
+        flush=True,
+    )
+
+    return src.stat().st_size, dst.stat().st_size, dropped
 
 
 def main() -> None:
@@ -54,23 +72,15 @@ def main() -> None:
     src = Path(args.checkpoint)
     dst = Path(args.out) if args.out else src.with_name(src.stem + "_slim.pt")
 
-    before, after = export(src, dst, half=args.half)
+    if not src.exists():
+        raise SystemExit(f"{src} does not exist")
 
-    # Loading it back is the actual check. A file that saved without error but
-    # cannot rebuild the model is worse than no file at all.
-    ckpt = torch.load(dst, map_location="cpu", weights_only=False)
-    model = GPT(ckpt["model_config"])
-    model.load_state_dict({k: v.float() for k, v in ckpt["model"].items()})
-    tokenizer = load_tokenizer_from_checkpoint(ckpt)
+    before, after, dropped = export(src, dst, half=args.half)
 
-    dropped = [k for k in DROP if k in torch.load(src, map_location="cpu",
-                                                  weights_only=False)]
     print(f"in          {src}  {before / 1e6:.1f} MB")
     print(f"out         {dst}  {after / 1e6:.1f} MB")
     print(f"saved       {(before - after) / 1e6:.1f} MB  ({1 - after / before:.0%})")
     print(f"dropped     {', '.join(dropped) or 'nothing'}")
-    print(f"verified    {model.num_parameters():,} params, "
-          f"{type(tokenizer).__name__} vocab {tokenizer.vocab_size}")
 
 
 if __name__ == "__main__":
