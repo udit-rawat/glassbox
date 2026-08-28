@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from glassbox.model.cache import LayerCache
 from glassbox.model.config import GPTConfig
 from glassbox.model.rope import apply_rope, build_rope_cache
 
@@ -110,8 +111,16 @@ class MultiHeadAttention(nn.Module):
             self.register_buffer("rope_cos", cos, persistent=False)
             self.register_buffer("rope_sin", sin, persistent=False)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, cache: LayerCache | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         B, T, C = x.shape
+
+        # Where this chunk of tokens sits in the sequence. Zero for a normal
+        # forward pass; the cache length when decoding one token at a time,
+        # which is what rotary embedding and the mask both need to stay aligned
+        # with absolute position.
+        start = cache.length if cache is not None else 0
 
         # (B, T, n*d_head) -> (B, n, T, d_head). The transpose puts the head axis
         # next to the batch axis so the matmuls inside attention treat heads as
@@ -128,9 +137,15 @@ class MultiHeadAttention(nn.Module):
             # Rotation is applied to queries and keys only, never to values.
             # Position enters through which positions match each other, not
             # through the content that gets passed along once they do.
-            cos, sin = self.rope_cos[:T], self.rope_sin[:T]
+            cos = self.rope_cos[start : start + T]
+            sin = self.rope_sin[start : start + T]
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
+
+        # Cached after rotation and before expansion — see LayerCache.append for
+        # why that ordering is the only correct one.
+        if cache is not None:
+            k, v = cache.append(k, v)
 
         # Grouped query attention stores fewer key/value heads than query heads
         # and expands them here. The saving is real at generation time, where
@@ -138,8 +153,14 @@ class MultiHeadAttention(nn.Module):
         k = repeat_kv(k, self.n_kv_groups)
         v = repeat_kv(v, self.n_kv_groups)
 
+        # Rows are the T queries starting at `start`; columns are every position
+        # now held, cached or not. With no cache this is the familiar square
+        # lower triangle; decoding one token it is a single row that may read
+        # everything before it.
+        mask = self.causal[start : start + T, : k.size(2)]
+
         attended, weights = scaled_dot_product_attention(
-            q, k, v, mask=self.causal[:T, :T], dropout=self.attn_dropout
+            q, k, v, mask=mask, dropout=self.attn_dropout
         )
 
         # Back to (B, T, C). contiguous() is required because transpose only
