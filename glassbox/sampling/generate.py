@@ -3,6 +3,8 @@
 import torch
 import torch.nn.functional as F
 
+from glassbox.model.cache import KVCache
+
 
 def _top_k_filter(logits: torch.Tensor, k: int) -> torch.Tensor:
     """Keep the k highest-scoring tokens, discard the rest."""
@@ -39,6 +41,7 @@ def generate(
     temperature: float = 1.0,
     top_k: int | None = None,
     top_p: float | None = None,
+    use_cache: bool = True,
 ) -> torch.Tensor:
     """Extend each sequence in idx by max_new_tokens, sampling one token at a time."""
     # Dropout must be off while generating, but silently leaving the model in
@@ -47,15 +50,28 @@ def generate(
     was_training = model.training
     model.eval()
 
+    cache = KVCache(model.config.n_layers) if use_cache else None
+
     try:
         for _ in range(max_new_tokens):
-            # Learned position embeddings only exist up to block_size, so the
-            # context is cropped to the most recent window. This is also why
-            # generation is quadratic today: every step re-reads the whole
-            # window from scratch. Phase 2's KV cache is what fixes it.
-            idx_cond = idx[:, -model.config.block_size :]
-
-            logits, _, _ = model(idx_cond)
+            if cache is not None and idx.size(1) < model.config.block_size:
+                # First pass feeds the whole prompt and fills the cache; every
+                # pass after feeds a single token, because the keys and values
+                # for everything before it are already stored.
+                idx_cond = idx if cache.length == 0 else idx[:, -1:]
+                logits, _, _ = model(idx_cond, cache=cache)
+            else:
+                # Past the context window the cache cannot help. The window has
+                # to slide, and sliding means renumbering positions — but RoPE
+                # baked absolute positions into the stored keys when they were
+                # written, so they cannot be reinterpreted at a different offset.
+                # Falling back to the cropped full pass keeps the output
+                # identical to uncached generation, which matters more than the
+                # speed of the tail.
+                if cache is not None:
+                    cache.reset()
+                idx_cond = idx[:, -model.config.block_size :]
+                logits, _, _ = model(idx_cond)
             # Only the final position predicts the next token; the rest were
             # already used during training and are discarded here.
             logits = logits[:, -1, :]
