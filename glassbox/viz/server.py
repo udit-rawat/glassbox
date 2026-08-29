@@ -212,11 +212,23 @@ def make_handler(router: Router):
 def serve(roots, host: str = "127.0.0.1", port: int = 8000, default=None):
     registry = discover(*roots)
     router = Router(registry, default)
+
+    # Bound before anything is announced. Printing the banner first makes a
+    # failed bind look like a successful start — the listing scrolls past and
+    # the traceback is above it, out of sight.
+    try:
+        httpd = ThreadingHTTPServer((host, port), make_handler(router))
+    except OSError as e:
+        raise SystemExit(
+            f"cannot bind {host}:{port}: {e.strerror}. "
+            f"Something else is already listening there — try --port {port + 10}."
+        )
+
     print(f"glassbox visualizer on http://{host}:{port}")
     for entry in registry.describe():
         mark = "*" if entry["name"] == router.default else " "
         print(f" {mark} {entry['name']:<12} {entry['params']:>11,}  {entry['label']}")
-    ThreadingHTTPServer((host, port), make_handler(router)).serve_forever()
+    httpd.serve_forever()
 
 
 def main() -> None:
