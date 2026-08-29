@@ -36,6 +36,10 @@ class Block:
     # leaving instead of the whole diagram jumping.
     present: bool = True
     note: str = ""
+    # The operations inside this stage, in order. What the card reveals when it
+    # is opened — an arrow between two boxes hides the actual arithmetic, and
+    # the arithmetic is the part worth seeing.
+    steps: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -48,6 +52,7 @@ class Block:
             "source": self.source,
             "present": self.present,
             "note": self.note,
+            "steps": list(self.steps),
         }
 
 
@@ -98,6 +103,18 @@ class Diagram:
         return outside + self.layer_parameters * self.config.n_layers
 
 
+NORM_STEPS = {
+    "layernorm": ['compute the mean and subtract it', 'compute the spread and divide by it', 'apply a learned gain and shift'],
+    "rmsnorm": ['square the values and average them', 'divide by the root of that average', 'apply a learned gain — there is no shift to apply'],
+}
+FFN_STEPS = {
+    "gelu": ['widen to the hidden size', 'apply GELU to every unit alike', 'project back to the model width'],
+    "swiglu": ['gate branch, squashed by SiLU', 'up branch, unsquashed', 'multiply them together, so the gate can suppress a unit', 'project back to the model width'],
+}
+# The final norm shares whichever the config selected.
+_FINAL_NORM = "ln_f"
+
+
 def _norm_params(config: GPTConfig) -> int:
     # RMSNorm carries a gain and nothing else; LayerNorm adds a shift when
     # biases are on. The difference is two numbers per layer and it is the
@@ -132,6 +149,10 @@ def build_diagram(config: GPTConfig) -> Diagram:
         "tokens", "Token ids", "embedding",
         detail="Integers, one per character or BPE token.",
         out_shape=(B, T), source="glassbox/tokenizer/",
+        steps=[
+            'a prompt becomes integers: "ROM" is [30, 27, 25]',
+            "one integer per character or BPE token",
+        ],
     ))
     blocks.append(Block(
         "token_embedding", "Token embedding", "embedding",
@@ -139,6 +160,11 @@ def build_diagram(config: GPTConfig) -> Diagram:
                "transposed as the output head.",
         out_shape=(B, T, d), params=c.vocab_size * d,
         source="glassbox/model/gpt.py",
+        steps=[
+            "index the table by token id",
+            "one learned vector per token",
+            "the same matrix is reused, transposed, as the output head",
+        ],
     ))
     blocks.append(Block(
         "position_embedding", "Position embedding", "embedding",
@@ -148,12 +174,21 @@ def build_diagram(config: GPTConfig) -> Diagram:
         present=c.pos_encoding == "learned",
         source="glassbox/model/gpt.py",
         note="Replaced by rotation inside attention when RoPE is on.",
+        steps=[
+            "index the table by slot",
+            "add to the token vector",
+            "attention alone cannot tell position 3 from position 30",
+        ],
     ))
     blocks.append(Block(
         "residual_start", "Residual stream", "residual",
         detail="The channel every block writes an increment into. Nothing "
                "replaces it; each layer only adds.",
         out_shape=(B, T, d), source="glassbox/model/gpt.py",
+        steps=[
+            "the stream begins here",
+            "every block adds into it; nothing replaces it",
+        ],
     ))
 
     blocks.append(Block(
@@ -164,12 +199,17 @@ def build_diagram(config: GPTConfig) -> Diagram:
                 "learned gain and shift."),
         out_shape=(B, T, d), params=_norm_params(c),
         source="glassbox/model/norm.py",
+        steps=NORM_STEPS[c.norm],
     ))
     blocks.append(Block(
         "block.attn.q_proj", "Query projection", "attention",
         detail=f"{c.n_heads} heads of {c.d_head}.",
         out_shape=(B, c.n_heads, T, c.d_head), params=_linear(d, q_width, c.bias),
         source="glassbox/model/attention.py",
+        steps=[
+            "project the stream to n_heads x d_head",
+            "split into independent heads",
+        ],
     ))
     blocks.append(Block(
         "block.attn.kv_proj", "Key and value projections", "attention",
@@ -183,6 +223,11 @@ def build_diagram(config: GPTConfig) -> Diagram:
         note=("Narrower than the query side — this is the tensor the KV cache "
               "stores, so the saving lands at generation time."
               if c.n_kv_heads != c.n_heads else ""),
+        steps=[
+            "project to n_kv_heads x d_head, twice",
+            "split into heads",
+            "repeat each head across its group of query heads",
+        ],
     ))
     blocks.append(Block(
         "block.attn.rope", "Rotary embedding", "attention",
@@ -193,6 +238,11 @@ def build_diagram(config: GPTConfig) -> Diagram:
         present=c.pos_encoding == "rope",
         source="glassbox/model/rope.py",
         note="Scores then depend only on the gap between two positions.",
+        steps=[
+            "pair adjacent dimensions into planes",
+            "rotate each plane by an angle set by position",
+            "queries and keys only, never values",
+        ],
     ))
     blocks.append(Block(
         "block.attn.scores", "Scores, mask, softmax", "attention",
@@ -202,17 +252,32 @@ def build_diagram(config: GPTConfig) -> Diagram:
         out_shape=(B, c.n_heads, T, T),
         source="glassbox/model/attention.py",
         note="This tensor is what the attention grid renders.",
+        steps=[
+            "every query against every key",
+            "divide by sqrt(d_head) to hold the variance at 1",
+            "set future positions to -inf",
+            "softmax over keys, so each row is a distribution",
+            "mix the values by those weights",
+        ],
     ))
     blocks.append(Block(
         "block.attn.out_proj", "Output projection", "attention",
         detail="Recombines the heads, which until now never saw each other.",
         out_shape=(B, T, d), params=_linear(d, d, c.bias),
         source="glassbox/model/attention.py",
+        steps=[
+            "lay the heads back side by side",
+            "project back to the model width",
+            "the first point at which heads see each other",
+        ],
     ))
     blocks.append(Block(
         "block.residual_1", "Residual add", "residual",
         detail="Write one of two per block.",
         out_shape=(B, T, d), source="glassbox/model/blocks.py",
+        steps=[
+            "add the attention output into the stream",
+        ],
     ))
 
     blocks.append(Block(
@@ -220,6 +285,7 @@ def build_diagram(config: GPTConfig) -> Diagram:
         detail="Same normalization, before the feed-forward branch.",
         out_shape=(B, T, d), params=_norm_params(c),
         source="glassbox/model/norm.py",
+        steps=NORM_STEPS[c.norm],
     ))
     if c.activation == "swiglu":
         blocks.append(Block(
@@ -232,6 +298,7 @@ def build_diagram(config: GPTConfig) -> Diagram:
             source="glassbox/model/feedforward.py",
             note=f"Three matrices, so the width is 8/3 rather than 4x — which "
                  f"keeps the parameter count level with GELU.",
+            steps=FFN_STEPS["swiglu"],
         ))
     else:
         blocks.append(Block(
@@ -241,12 +308,17 @@ def build_diagram(config: GPTConfig) -> Diagram:
             out_shape=(B, T, d),
             params=_linear(d, hidden, c.bias) + _linear(hidden, d, c.bias),
             source="glassbox/model/feedforward.py",
+            steps=FFN_STEPS["gelu"],
         ))
     blocks.append(Block(
         "block.residual_2", "Residual add", "residual",
         detail="Write two of two. Variance grows with depth, which is why the "
                "projections writing here start smaller in deeper models.",
         out_shape=(B, T, d), source="glassbox/model/blocks.py",
+        steps=[
+            "add the feed-forward output into the stream",
+            "write two of two per block",
+        ],
     ))
 
     blocks.append(Block(
@@ -254,6 +326,7 @@ def build_diagram(config: GPTConfig) -> Diagram:
         detail="One last normalization before the stream is scored.",
         out_shape=(B, T, d), params=_norm_params(c),
         source="glassbox/model/gpt.py",
+        steps=NORM_STEPS[c.norm],
     ))
     blocks.append(Block(
         "lm_head", "Output head (tied)", "output",
@@ -263,11 +336,20 @@ def build_diagram(config: GPTConfig) -> Diagram:
         out_shape=(B, T, c.vocab_size), params=0,
         source="glassbox/model/gpt.py",
         note="Weights shared with the token embedding.",
+        steps=[
+            "normalize the stream one last time",
+            "score it against every token in the vocabulary",
+            "weights shared with the token embedding",
+        ],
     ))
     blocks.append(Block(
         "logits", "Logits", "output",
         detail="One score per token at every position.",
         out_shape=(B, T, c.vocab_size), source="glassbox/model/gpt.py",
+        steps=[
+            "one score per token at every position",
+            "softmax turns them into the next-token distribution",
+        ],
     ))
 
     return Diagram(config=c, blocks=blocks)
