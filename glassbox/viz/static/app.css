@@ -1,0 +1,260 @@
+/* glassbox visualizer.
+
+   Monospace throughout, with a bitmap face for the title. One light theme:
+   chrome is black, white and grey, and colour appears only where it carries
+   meaning — one hue and one geometric marker per component kind. The output
+   head shares the embedding's hue and shape because it is the embedding
+   transposed. */
+
+:root{
+  --ground:#ffffff; --surface:#fbfbfb; --surface-2:#f2f2f2; --line:#e4e4e4;
+  --line-strong:#b8b8b8;
+  --ink:#0a0a0a; --ink-mid:#4a4a4a; --ink-mute:#8a8a8a;
+
+  --embedding:#c2560f;   --embedding-rgb:194,86,15;
+  --attention:#12607f;   --attention-rgb:18,96,127;
+  --feedforward:#5f3aa6; --feedforward-rgb:95,58,166;
+  --norm:#5c5c66;        --norm-rgb:92,92,102;
+  --residual:#26262c;    --residual-rgb:38,38,44;
+  --output:#c2560f;      --output-rgb:194,86,15;
+
+  --pad:56px;
+  --card-w:330px;
+  --display:"Julius Sans One",ui-sans-serif,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+}
+@media (max-width:820px){:root{--pad:20px;--card-w:290px}}
+
+/* Glass, not flat fill. A tinted translucent pane, a bright rim along the top
+   edge where light would catch it, and a soft shadow in its own hue. The name
+   of the project is the reason: you are meant to see through the thing. */
+.glass{
+  background:linear-gradient(152deg,
+      rgba(var(--kind-rgb),.16) 0%,
+      rgba(var(--kind-rgb),.07) 46%,
+      rgba(255,255,255,.42) 100%);
+  backdrop-filter:blur(14px) saturate(150%);
+  -webkit-backdrop-filter:blur(14px) saturate(150%);
+  border:1px solid rgba(var(--kind-rgb),.30);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.92),
+    inset 0 0 0 1px rgba(255,255,255,.35),
+    0 10px 26px -16px rgba(var(--kind-rgb),.55);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--mono);
+  font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;
+  font-feature-settings:"zero" 1}
+button{font:inherit;color:inherit;cursor:pointer}
+
+/* ------------------------------------------------------------- header */
+.mast{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;
+  padding:26px var(--pad) 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{margin:0;font-family:var(--display);font-size:34px;font-weight:400;
+  letter-spacing:.30em;line-height:1;text-transform:lowercase;position:relative}
+/* Etched into frosted glass: the fill fades toward the tail, a hairline of
+   white sits above the letterforms where light would catch a bevel, and a
+   diffuse shadow sits beneath as if the pane had depth. */
+h1 span{
+  background:linear-gradient(168deg,#0a0a0a 0%,#2b2b31 52%,#6f6f78 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  text-shadow:0 1px 0 rgba(255,255,255,.95),0 6px 16px rgba(0,0,0,.12);
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.6))}
+.d-title{font-family:var(--display);font-size:20px;font-weight:400;
+  letter-spacing:.10em;margin:11px 0 18px}
+.sub{margin:9px 0 0;color:var(--ink-mute);font-size:12px}
+.mast-right{display:flex;align-items:flex-end;gap:30px}
+.stat{margin:0}
+.stat dt{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-mute)}
+.stat dd{margin:2px 0 0;font-size:15px;font-weight:500;
+  font-variant-numeric:tabular-nums}
+
+/* --------------------------------------------------------- control bar */
+.bar{display:flex;align-items:flex-end;gap:24px;padding:14px var(--pad);
+  border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap;
+  position:sticky;top:0;z-index:5}
+.bar-spacer{flex:1}
+.control-name{display:block;font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-mute);margin-bottom:6px}
+.seg{display:flex;border:1px solid var(--line);background:var(--ground)}
+.seg button{background:none;border:0;border-right:1px solid var(--line);
+  padding:5px 12px;font-size:11.5px;color:var(--ink-mute);transition:background .12s}
+.seg button:last-child{border-right:0}
+.seg button:hover{background:var(--surface-2);color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--ground);font-weight:500}
+.breakdown{display:flex;gap:18px;align-items:center}
+.bd{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--ink-mute)}
+.bd b{font-weight:500;color:var(--ink-mid);font-variant-numeric:tabular-nums}
+.note{margin:0;padding:11px var(--pad);font-size:11.5px;color:var(--ink-mute);
+  border-bottom:1px solid var(--line)}
+
+/* ------------------------------------------------------------- canvas */
+main{position:relative;display:block}
+.canvas{padding:34px var(--pad) 120px;position:relative;isolation:isolate}
+/* Room for the floating panel, taken symmetrically so the flow stays centred
+   on the page rather than on the leftover space. */
+@media (min-width:1380px){
+  .canvas{padding-left:calc(var(--pad) * 2 + 308px);
+          padding-right:calc(var(--pad) * 2 + 308px)}
+}
+/* A barely-there ground so the panes have something to refract. Grey only —
+   the chrome stays black and white. */
+.canvas::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(60% 40% at 50% 12%, rgba(0,0,0,.045), transparent 70%),
+    radial-gradient(46% 34% at 82% 58%, rgba(0,0,0,.035), transparent 72%),
+    radial-gradient(44% 32% at 16% 82%, rgba(0,0,0,.03), transparent 72%)}
+.lede{max-width:62ch;margin:0 auto 34px;font-size:12px;color:var(--ink-mute);
+  line-height:1.7;text-align:center}
+/* The spine is centred and stays centred. Branches are taken out of flow and
+   floated to the right, so opening one never shifts the column sideways. */
+.flow{width:var(--card-w);margin:0 auto;display:flex;flex-direction:column;
+  align-items:stretch;position:relative}
+.stage{position:relative}
+
+.card{position:relative;width:var(--card-w);flex:none;padding:15px 17px;
+  border-radius:13px;cursor:pointer;
+  transition:transform .16s cubic-bezier(.33,1,.68,1),box-shadow .16s,
+             max-height .3s,opacity .24s,padding .3s;
+  max-height:132px;overflow:hidden}
+.card:hover{transform:translateY(-2px)}
+.card:hover,.card[aria-selected="true"]{
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.95),
+    inset 0 0 0 1px rgba(255,255,255,.45),
+    0 14px 30px -14px rgba(var(--kind-rgb),.6),
+    0 0 0 1px rgba(var(--kind-rgb),.42)}
+
+.card-top{display:flex;align-items:flex-start;gap:12px}
+.marker{flex:none;margin-top:2px}
+.card-head{flex:1;min-width:0}
+.card-kind{font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--kind)}
+.card-title{font-size:14px;font-weight:500;line-height:1.35;margin-top:3px}
+.card-nums{text-align:right;flex:none}
+.card-shape{font-size:10.5px;color:var(--ink-mute);white-space:nowrap}
+.card-params{font-size:12.5px;color:var(--ink-mid);font-variant-numeric:tabular-nums;
+  margin-top:2px}
+.card-more{display:flex;align-items:center;gap:7px;margin-top:10px;font-size:10px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--kind)}
+.card-more .chev{font-size:8px;transition:transform .2s}
+.stage[data-open="true"] .card-more .chev{transform:rotate(90deg)}
+.pulse{position:relative;width:5px;height:5px;background:var(--kind);flex:none}
+.pulse::after{content:"";position:absolute;inset:0;background:var(--kind);
+  animation:blip 2.2s ease-out infinite}
+@keyframes blip{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(3.6);opacity:0}}
+.stage[data-open="true"] .pulse::after{animation:none}
+
+.card.absent{max-height:0;padding-top:0;padding-bottom:0;opacity:0;border-width:0}
+.stage.absent-row + .link{max-height:0;opacity:0}
+.card.changed{animation:flash .9s ease-out}
+@keyframes flash{0%{box-shadow:-4px 4px 0 0 var(--kind)}100%{box-shadow:-4px 4px 0 0 transparent}}
+
+/* ------------------------------------------ the sideways branch of steps */
+.rail{position:absolute;left:100%;top:0;display:flex;align-items:flex-start;
+  overflow:hidden;max-width:0;opacity:0;
+  transition:max-width .55s cubic-bezier(.33,1,.68,1),opacity .4s}
+.stage[data-open="true"] .rail{max-width:1200px;opacity:1}
+.rail-stem{width:26px;height:1px;background:var(--kind);margin-top:33px;flex:none}
+.steps{display:flex;align-items:flex-start;gap:0}
+.step{width:118px;flex:none;display:flex;flex-direction:column;align-items:center;
+  gap:8px;padding:0 4px}
+.tile{width:54px;height:54px;border-radius:11px;display:flex;align-items:center;
+  justify-content:center;font-size:15px;font-weight:500;color:var(--kind);
+  position:relative}
+.tile::after{content:"";position:absolute;inset:5px;border-radius:7px;
+  border:1px solid rgba(255,255,255,.6);pointer-events:none}
+.step p{margin:0;font-size:10.5px;line-height:1.45;color:var(--ink-mid);
+  text-align:center}
+.hop{width:20px;height:1px;background:var(--kind);opacity:.5;margin-top:33px;flex:none}
+
+/* connectors down the spine */
+.link{width:1px;height:24px;background:var(--line-strong);margin:0 auto;
+  position:relative;transition:max-height .3s,opacity .24s;max-height:24px}
+.link::after{content:"";position:absolute;bottom:0;left:50%;width:5px;height:5px;
+  border-bottom:1px solid var(--line-strong);border-right:1px solid var(--line-strong);
+  transform:translateX(-50%) rotate(45deg)}
+
+[data-kind="embedding"]{--kind:var(--embedding);--kind-rgb:var(--embedding-rgb)}
+[data-kind="attention"]{--kind:var(--attention);--kind-rgb:var(--attention-rgb)}
+[data-kind="feedforward"]{--kind:var(--feedforward);--kind-rgb:var(--feedforward-rgb)}
+[data-kind="norm"]{--kind:var(--norm);--kind-rgb:var(--norm-rgb)}
+[data-kind="residual"]{--kind:var(--residual);--kind-rgb:var(--residual-rgb)}
+[data-kind="output"]{--kind:var(--output);--kind-rgb:var(--output-rgb)}
+.stage{--kind:var(--ink);--kind-rgb:38,38,44}
+
+/* ------------------------------------------------------------ ×N group */
+.stack{position:relative;border:1px dashed var(--line-strong);padding:32px 16px 16px;
+  background:var(--surface);margin:4px -17px}
+.stack-head{display:flex;align-items:center;gap:10px;position:absolute;top:-12px;
+  left:16px;background:var(--ground);border:1px solid var(--line);padding:3px 12px 3px 10px}
+.stack-head:hover{border-color:var(--line-strong)}
+.stack-title{font-size:11.5px;font-weight:500}
+.stack-head .chev{font-size:8px;color:var(--ink-mute);transition:transform .2s}
+.stack[data-open="true"] .stack-head .chev{transform:rotate(90deg)}
+.badge{font-size:11px;padding:1px 8px;background:var(--ink);color:var(--ground);
+  font-variant-numeric:tabular-nums}
+.stack-meta{font-size:10px;color:var(--ink-mute);font-variant-numeric:tabular-nums}
+.stack-body{display:flex;flex-direction:column;align-items:flex-start}
+.stack-shut{display:flex;align-items:center;gap:18px}
+.mini{display:flex;gap:6px;align-items:center}
+.stack-shut p{margin:0;font-size:11px;color:var(--ink-mute);max-width:34ch}
+.stack[data-open="true"] .stack-shut{display:none}
+.stack[data-open="false"] .stack-body{display:none}
+
+/* -------------------------------------------------------------- detail */
+/* On the left and sticky, so it fills in as each stage opens rather than
+   waiting at the bottom of the page for someone to scroll that far. */
+.detail{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  padding:26px 24px 30px;margin:34px var(--pad) 0}
+@media (min-width:1380px){
+  /* Inset from the left edge by the same margin the page uses on the right, so
+     the two sides balance and the diagram keeps the middle to itself. */
+  .detail{position:fixed;left:var(--pad);top:150px;width:308px;margin:0;
+    max-height:calc(100vh - 200px);overflow-y:auto;z-index:3}
+}
+.detail-empty{color:var(--ink-mute);font-size:12px}
+.detail-hint{margin:0;line-height:1.7}
+.d-head{display:flex;align-items:center;gap:11px}
+.d-kind{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--kind)}
+.d-grid{display:flex;flex-direction:column;gap:22px}
+.d-body{font-size:13px;line-height:1.75;color:var(--ink-mid);margin:0;max-width:70ch}
+.d-note{margin:14px 0 0;padding:12px 14px;background:var(--ground);
+  border-left:2px solid var(--kind);font-size:12px;line-height:1.7;color:var(--ink-mid);
+  max-width:70ch}
+.d-facts{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.d-fact{display:flex;justify-content:space-between;gap:14px;font-size:11.5px;
+  border-bottom:1px solid var(--line);padding-bottom:8px}
+.d-fact span{color:var(--ink-mute)}
+.d-fact b{font-weight:500;font-variant-numeric:tabular-nums;text-align:right}
+.d-src{font-size:10.5px;color:var(--ink-mute);word-break:break-all;margin-top:14px}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ------------------------------------------------------------ walkthrough */
+.play{background:var(--ground);border:1px solid var(--ink);padding:6px 14px;
+  font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  transition:background .13s,color .13s}
+.play:hover{background:var(--ink);color:var(--ground)}
+.play[data-playing="true"]{background:var(--ink);color:var(--ground)}
+/* the stage being narrated */
+.stage.lit .card{box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.95),
+    0 18px 38px -16px rgba(var(--kind-rgb),.7),
+    0 0 0 1.5px rgba(var(--kind-rgb),.55)}
+
+/* --------------------------------------------------------------- signal */
+/* A line drawn from the panel to whichever stage is being explained, so the
+   two halves of the page are visibly the same thought. Dashes travel along it
+   toward the panel, in the direction the explanation flows. */
+.signal{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
+  z-index:2;overflow:visible;opacity:0;transition:opacity .35s}
+.signal.on{opacity:1}
+.signal path{fill:none;stroke:var(--kind,#26262c);stroke-width:1.3;
+  stroke-dasharray:5 6;stroke-linecap:round;
+  animation:travel 1.1s linear infinite}
+@keyframes travel{to{stroke-dashoffset:-11}}
+@media (max-width:1379px){.signal{display:none}}
+@media (prefers-reduced-motion:reduce){.signal path{animation:none}}
