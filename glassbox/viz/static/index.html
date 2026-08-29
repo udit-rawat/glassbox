@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glassbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Julius+Sans+One&family=IBM+Plex+Mono:wght@400;450;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="mast">
+  <div>
+    <h1><span>glassbox</span></h1>
+    <p class="sub" id="subtitle">a language model you can see inside</p>
+  </div>
+  <div class="mast-right">
+    <dl class="stat"><dt>parameters</dt><dd id="stat-params">—</dd></dl>
+    <dl class="stat"><dt>per block</dt><dd id="stat-layer">—</dd></dl>
+  </div>
+</header>
+
+<div class="bar">
+  <div class="control" data-field="norm">
+    <span class="control-name">normalization</span>
+    <div class="seg"><button data-value="layernorm">LayerNorm</button><button data-value="rmsnorm">RMSNorm</button></div>
+  </div>
+  <div class="control" data-field="activation">
+    <span class="control-name">feed-forward</span>
+    <div class="seg"><button data-value="gelu">GELU</button><button data-value="swiglu">SwiGLU</button></div>
+  </div>
+  <div class="control" data-field="pos_encoding">
+    <span class="control-name">position</span>
+    <div class="seg"><button data-value="learned">Learned</button><button data-value="rope">RoPE</button></div>
+  </div>
+  <div class="control" data-field="n_kv_heads">
+    <span class="control-name">key/value heads</span>
+    <div class="seg" id="kv-seg"></div>
+  </div>
+  <div class="bar-spacer"></div>
+  <button id="play" class="play">▶ walkthrough</button>
+  <div class="breakdown" id="breakdown"></div>
+</div>
+
+<p class="note" id="preset-note"></p>
+
+<main>
+  <svg class="signal" id="signal" aria-hidden="true"><path/></svg>
+  <aside class="detail" id="detail">
+    <div class="detail-empty">
+      <p class="detail-hint">select a stage, or press walkthrough, to see what
+        each part does as it opens</p>
+    </div>
+  </aside>
+
+  <div class="canvas">
+    <p class="lede">One pass through the model, top to bottom. Every shape and
+      count is computed from the configuration above rather than drawn. Open a
+      stage to branch out the arithmetic inside it.</p>
+    <div class="flow" id="diagram" aria-live="polite"></div>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
