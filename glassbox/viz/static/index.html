@@ -12,39 +12,69 @@
 <body>
 
 <header class="mast">
-  <div>
+  <div class="wordmark">
+    <svg class="glyph" viewBox="0 0 34 34" aria-hidden="true">
+      <defs>
+        <linearGradient id="pane" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#000" stop-opacity=".14"/>
+          <stop offset=".55" stop-color="#000" stop-opacity=".05"/>
+          <stop offset="1" stop-color="#fff" stop-opacity=".5"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="30" height="30" rx="8" fill="url(#pane)"
+            stroke="#111114" stroke-opacity=".8" stroke-width="1.4"/>
+      <rect x="4.4" y="4.4" width="25.2" height="25.2" rx="6" fill="none"
+            stroke="#fff" stroke-opacity=".85"/>
+      <path d="M9 22.5 L22.5 9" stroke="#fff" stroke-opacity=".95"
+            stroke-width="3" stroke-linecap="round"/>
+      <path d="M13.5 25 L26 12.5" stroke="#fff" stroke-opacity=".6"
+            stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="12.4" cy="12.4" r="2.1" fill="#111114" fill-opacity=".82"/>
+    </svg>
     <h1><span>glassbox</span></h1>
-    <p class="sub" id="subtitle">a language model you can see inside</p>
   </div>
-  <div class="mast-right">
-    <dl class="stat"><dt>parameters</dt><dd id="stat-params">—</dd></dl>
-    <dl class="stat"><dt>per block</dt><dd id="stat-layer">—</dd></dl>
-  </div>
+  <p class="tagline">
+    <svg class="tag-glyph" viewBox="0 0 12 12" aria-hidden="true">
+      <rect x="1" y="1" width="10" height="10" rx="2.6" fill="none"
+            stroke="currentColor" stroke-opacity=".55"/>
+      <path d="M3.4 8.6 L8.6 3.4" stroke="currentColor" stroke-opacity=".85"
+            stroke-linecap="round"/>
+    </svg>
+    visualise the transformer, one stage at a time
+  </p>
 </header>
 
 <div class="bar">
-  <div class="control" data-field="norm">
-    <span class="control-name">normalization</span>
-    <div class="seg"><button data-value="layernorm">LayerNorm</button><button data-value="rmsnorm">RMSNorm</button></div>
+  <div class="bar-row">
+    <div class="control" data-field="norm">
+      <span class="control-name">normalization</span>
+      <div class="seg"><button data-value="layernorm">LayerNorm</button><button data-value="rmsnorm">RMSNorm</button></div>
+    </div>
+    <div class="control" data-field="activation">
+      <span class="control-name">feed-forward</span>
+      <div class="seg"><button data-value="gelu">GELU</button><button data-value="swiglu">SwiGLU</button></div>
+    </div>
+    <div class="control" data-field="pos_encoding">
+      <span class="control-name">position</span>
+      <div class="seg"><button data-value="learned">Learned</button><button data-value="rope">RoPE</button></div>
+    </div>
+    <div class="control" data-field="n_kv_heads">
+      <span class="control-name">key/value heads</span>
+      <div class="seg" id="kv-seg"></div>
+    </div>
+    <div class="bar-spacer"></div>
+    <button id="play" class="play">▶ walkthrough</button>
   </div>
-  <div class="control" data-field="activation">
-    <span class="control-name">feed-forward</span>
-    <div class="seg"><button data-value="gelu">GELU</button><button data-value="swiglu">SwiGLU</button></div>
-  </div>
-  <div class="control" data-field="pos_encoding">
-    <span class="control-name">position</span>
-    <div class="seg"><button data-value="learned">Learned</button><button data-value="rope">RoPE</button></div>
-  </div>
-  <div class="control" data-field="n_kv_heads">
-    <span class="control-name">key/value heads</span>
-    <div class="seg" id="kv-seg"></div>
-  </div>
-  <div class="bar-spacer"></div>
-  <button id="play" class="play">▶ walkthrough</button>
-  <div class="breakdown" id="breakdown"></div>
-</div>
 
-<p class="note" id="preset-note"></p>
+  <div class="bar-row bar-facts">
+    <span class="fact" id="model-name">—</span>
+    <span class="fact"><em>parameters</em> <b id="stat-params">—</b></span>
+    <span class="fact"><em>per block</em> <b id="stat-layer">—</b></span>
+    <div class="breakdown" id="breakdown"></div>
+    <div class="bar-spacer"></div>
+    <span class="fact note" id="preset-note"></span>
+  </div>
+</div>
 
 <main>
   <svg class="signal" id="signal" aria-hidden="true"><path/></svg>
@@ -62,6 +92,19 @@
     <div class="flow" id="diagram" aria-live="polite"></div>
   </div>
 </main>
+
+<footer class="foot">
+  <div>
+    <strong>glassbox</strong>
+    <span>a transformer built from first principles, in pure PyTorch</span>
+  </div>
+  <nav>
+    <a href="https://github.com/udit-rawat/glassbox">repository</a>
+    <a href="https://github.com/udit-rawat">github</a>
+    <a href="https://www.linkedin.com/in/udit-rawat" data-needs-url="linkedin">linkedin</a>
+  </nav>
+  <span class="by">built by Udit Rawat</span>
+</footer>
 
 <script src="/static/app.js"></script>
 </body>
