@@ -8,7 +8,12 @@ into a modern Llama-style architecture, trained for real, fine-tuned with
 LoRA written from scratch, and finished with an interactive visualizer
 that shows you exactly what every attention head is doing.
 
-> Visualizer screenshot lands here — Phase 5.
+**[Open the live demo →](https://udit-rawat.github.io/glassbox/)**
+
+![The attention grid](docs/images/activations.png)
+
+*Thirty-six attention heads from a model trained from scratch, each one a real
+map of where it looked. Sorted by behaviour, labelled by what they do.*
 
 ## Why "glassbox"
 
@@ -34,8 +39,77 @@ and watched while it runs. The opposite of a black box.
   against a 4,096-token vocabulary. 49 minutes on a T4.*
 - [ ] **Phase 4 — Fine-tuning a real model.** LoRA implemented from
   scratch (~80 lines), then instruction-tuning a real pretrained model.
-- [ ] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
+- [x] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
+  *Plus an architecture diagram generated from the config, with the Phase 2
+  switches as live toggles.*
+
+## Phase 5 — the visualizer
+
+A single page with three views, no framework and no build step. Run it against
+your own checkpoints, or open the [hosted
+demo](https://udit-rawat.github.io/glassbox/).
+
+```bash
+python -m glassbox.viz.server --checkpoints checkpoints/ablation
+```
+
+### Architecture — generated, never drawn
+
+![The architecture view](docs/images/architecture.png)
+
+Every tensor shape and every parameter count comes from the same `GPTConfig`
+the model is built from, so the diagram cannot drift out of step with the code.
+A test asserts the totals equal `GPT.num_parameters()` across eight
+configurations, and they match all seven trained checkpoints exactly.
+
+The four Phase 2 switches are live. Flip **RoPE off** and the position table
+reappears in the diagram and the total climbs by exactly `block_size × d_model`.
+Open any stage to branch its arithmetic out sideways, or press **walkthrough**
+to have the whole model unfold one stage at a time and fold back up.
+
+### Activations — one prompt, one forward pass
+
+Thirty-six attention heads as heatmaps, sortable by **mean attention distance,
+previous-token score or entropy**, so heads of a kind cluster instead of
+scattering by index. Click one for the enlarged map with token labels; hovering
+reports the actual weight, and above the diagonal it tells you the query cannot
+see that key because it comes later.
+
+The **logit lens** reads the model's own output head against every layer's
+residual stream, so you watch a prediction sharpen with depth. On the trained
+model, prompted with `ROMEO:\nWhat is th`:
+
+```
+embedding  'h' 1.000     <- the copying bias: the token already present
+layer 1    'e' 0.510     <- one block of attention is enough to see "th"
+layer 2    'e' 0.534
+layer 3    'e' 0.638
+layer 4    'e' 0.733
+layer 5    'e' 0.778
+layer 6    'e' 0.746
+```
+
+That first row is the finding from day one, visible: weight tying plus the
+residual stream make an untrained model a copier, and it shows up here as the
+embedding predicting the character that is already there.
+
+### Generate — the ablation, side by side
+
+![The generate view](docs/images/generate.png)
+
+The same prompt and the same seed through any of the six ablation checkpoints,
+with each one's validation loss and parameter count beside the output. Switching
+from `baseline` to `rope` is a real before-and-after of one architecture change.
+
+### Hosting
+
+`scripts/export_static.py` bakes the page into one self-contained HTML file.
+The architecture view stays fully interactive there — all 32 switch
+combinations are precomputed, because describing a configuration is arithmetic
+rather than inference. Activations and generations are **recordings of real
+forward passes**, since a static host has no Python behind it, and the page
+says so rather than pretending otherwise.
 
 ## Phase 3 result — it writes English
 
