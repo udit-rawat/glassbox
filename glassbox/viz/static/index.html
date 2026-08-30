@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>glassbox</title>
+<title>glassbox — visualise the transformer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%228%22%20fill%3D%22%230b0b0d%22%2F%3E%3Cpath%20d%3D%22M7%2023L23%207%22%20stroke%3D%22%23fff%22%20stroke-width%3D%224.2%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.95%22%2F%3E%3Cpath%20d%3D%22M13.5%2026.5L26.5%2013.5%22%20stroke%3D%22%23fff%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.42%22%2F%3E%3Ccircle%20cx%3D%2210.8%22%20cy%3D%2210.8%22%20r%3D%222.7%22%20fill%3D%22%23fff%22%20opacity%3D%22.9%22%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Julius+Sans+One&family=IBM+Plex+Mono:wght@400;450;500;600&display=swap" rel="stylesheet">
@@ -42,9 +43,15 @@
     </svg>
     visualise the transformer, one stage at a time
   </p>
+  <nav class="modes" id="modes">
+    <button data-mode="architecture" aria-pressed="true">architecture</button>
+    <button data-mode="activations" aria-pressed="false">activations</button>
+    <button data-mode="generate" aria-pressed="false">generate</button>
+  </nav>
+  <p class="status" id="status"><i></i><span></span></p>
 </header>
 
-<div class="bar">
+<div class="bar" data-for="architecture">
   <div class="bar-row">
     <div class="control" data-field="norm">
       <span class="control-name">normalization</span>
@@ -76,7 +83,7 @@
   </div>
 </div>
 
-<main>
+<main data-view="architecture">
   <svg class="signal" id="signal" aria-hidden="true"><path/></svg>
   <aside class="detail" id="detail">
     <div class="detail-empty">
@@ -93,6 +100,76 @@
   </div>
 </main>
 
+<section class="view" data-view="activations" hidden>
+  <div class="prompt-bar">
+    <input id="ins-prompt" type="text" spellcheck="false"
+           value="ROMEO:&#10;What is th" aria-label="prompt">
+    <select id="ins-model" aria-label="model"></select>
+    <button id="ins-run" class="run">inspect</button>
+  </div>
+
+  <div class="act-wrap">
+    <div class="act-tokens">
+      <span class="cap">tokens · click one to inspect that position</span>
+      <div id="tokens" class="tokens"></div>
+    </div>
+
+    <div class="act-main">
+      <section class="pane">
+        <header class="pane-head">
+          <span class="cap">attention · layer by head</span>
+          <div class="sortby">
+            <span>sort</span>
+            <button data-sort="layer" aria-pressed="true">layer</button>
+            <button data-sort="mean_distance" aria-pressed="false">distance</button>
+            <button data-sort="previous_token" aria-pressed="false">prev-token</button>
+            <button data-sort="entropy" aria-pressed="false">entropy</button>
+          </div>
+        </header>
+        <div id="grid" class="grid"></div>
+      </section>
+
+      <section class="pane">
+        <header class="pane-head"><span class="cap" id="head-cap">selected head</span></header>
+        <div class="detail-head">
+          <div class="heat-wrap">
+            <canvas id="heat" class="heat"></canvas>
+            <div id="heat-axis-y" class="axis axis-y"></div>
+            <div id="heat-axis-x" class="axis axis-x"></div>
+          </div>
+          <p class="readout" id="readout">hover the map to read a weight</p>
+          <div class="stats" id="head-stats"></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="pane">
+      <header class="pane-head"><span class="cap" id="lens-cap">logit lens · what the model would say at each depth</span></header>
+      <div id="lens" class="lens"></div>
+    </section>
+
+    <section class="pane">
+      <header class="pane-head"><span class="cap" id="pred-cap">next token</span></header>
+      <div id="preds" class="preds"></div>
+    </section>
+  </div>
+</section>
+
+<section class="view" data-view="generate" hidden>
+  <div class="prompt-bar">
+    <input id="gen-prompt" type="text" spellcheck="false"
+           value="ROMEO:" aria-label="prompt">
+    <select id="gen-model" aria-label="model"></select>
+    <button id="gen-run" class="run">generate</button>
+  </div>
+  <div class="gen-wrap">
+    <p class="cap gen-note">same prompt, same seed, one architecture at a time.
+      switch the model to see what the four Phase 2 changes are actually worth.</p>
+    <div class="gen-meta" id="gen-meta"></div>
+    <pre id="gen-out" class="gen-out">press generate</pre>
+  </div>
+</section>
+
 <footer class="foot">
   <div>
     <strong>glassbox</strong>
@@ -101,7 +178,7 @@
   <nav>
     <a href="https://github.com/udit-rawat/glassbox">repository</a>
     <a href="https://github.com/udit-rawat">github</a>
-    <a href="https://www.linkedin.com/in/udit-rawat" data-needs-url="linkedin">linkedin</a>
+    <a href="https://www.linkedin.com/in/udit-r/">linkedin</a>
   </nav>
   <span class="by">built by Udit Rawat</span>
 </footer>
