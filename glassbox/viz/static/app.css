@@ -45,9 +45,18 @@
 }
 
 *{box-sizing:border-box}
+/* main and .bar both set an explicit display, which beats the user-agent rule
+   for [hidden] — so toggling the attribute did nothing and every view stayed
+   on top of the others. */
+[hidden]{display:none!important}
+/* The footer is last in the document, but the generate view is short enough
+   that on a tall window it stopped short of the bottom and left the footer
+   floating in the middle of the page. Pinning it costs one flex column. */
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--mono);
   font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;
-  font-feature-settings:"zero" 1}
+  font-feature-settings:"zero" 1;
+  min-height:100vh;display:flex;flex-direction:column}
+.foot{margin-top:auto}
 button{font:inherit;color:inherit;cursor:pointer}
 
 /* ------------------------------------------------------------- header */
@@ -287,3 +296,161 @@ main{position:relative;display:block}
   padding-bottom:1px;transition:color .13s,border-color .13s}
 .foot a:hover{color:var(--ink);border-color:var(--ink)}
 .foot .by{letter-spacing:.1em;text-transform:uppercase;font-size:10px}
+
+/* ====================================================== activations & generate */
+
+.modes{display:flex;justify-content:center;gap:0;margin-top:18px}
+.modes button{background:var(--ground);border:1px solid var(--line);border-right:0;
+  padding:6px 18px;font-size:11px;letter-spacing:.1em;text-transform:lowercase;
+  color:var(--ink-mute);transition:background .13s,color .13s}
+.modes button:first-child{border-radius:7px 0 0 7px}
+.modes button:last-child{border-right:1px solid var(--line);border-radius:0 7px 7px 0}
+.modes button:hover{background:var(--surface-2);color:var(--ink)}
+.modes button[aria-pressed="true"]{background:var(--ink);color:var(--ground);
+  border-color:var(--ink)}
+
+.view{padding:0 var(--pad) 70px}
+.view[data-view="generate"]{padding-bottom:50px}
+.cap{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-mute)}
+
+.prompt-bar{display:flex;gap:10px;align-items:stretch;padding:22px 0 18px;
+  max-width:1180px;margin:0 auto}
+.prompt-bar input{flex:1;font:inherit;font-size:13px;padding:9px 13px;
+  border:1px solid var(--line);border-radius:8px;background:var(--ground);
+  color:var(--ink)}
+.prompt-bar input:focus{outline:none;border-color:var(--ink)}
+.prompt-bar select{font:inherit;font-size:12px;padding:9px 11px;border-radius:8px;
+  border:1px solid var(--line);background:var(--ground);color:var(--ink)}
+.run{background:var(--ink);color:var(--ground);border:1px solid var(--ink);
+  border-radius:8px;padding:9px 20px;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase}
+.run:hover{opacity:.86}
+.run[disabled]{opacity:.45;cursor:default}
+
+.act-wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.pane{border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  padding:14px 16px 16px}
+.pane-head{display:flex;justify-content:space-between;align-items:center;gap:16px;
+  margin-bottom:12px;flex-wrap:wrap}
+.sortby{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--ink-mute)}
+.sortby button{background:var(--ground);border:1px solid var(--line);
+  padding:3px 9px;font-size:10px;color:var(--ink-mute);border-radius:5px}
+.sortby button[aria-pressed="true"]{background:var(--ink);color:var(--ground);
+  border-color:var(--ink)}
+
+.tokens{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.tok{border:1px solid var(--line);background:var(--ground);border-radius:5px;
+  padding:4px 7px;font-size:12px;color:var(--ink-mid);transition:all .11s}
+.tok:hover{border-color:var(--line-strong)}
+.tok[aria-pressed="true"]{background:var(--attention);border-color:var(--attention);
+  color:#fff}
+
+.act-main{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+@media (min-width:1100px){.act-main{grid-template-columns:minmax(0,1fr) 400px}}
+
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
+.cell{border:1px solid var(--line);border-radius:6px;background:var(--ground);
+  padding:5px;display:flex;flex-direction:column;gap:4px;transition:all .12s}
+.cell:hover{border-color:var(--attention)}
+.cell[aria-pressed="true"]{border-color:var(--attention);
+  box-shadow:0 0 0 2px rgba(var(--attention-rgb),.28)}
+.cell canvas{width:100%;aspect-ratio:1;image-rendering:pixelated;border-radius:3px;
+  display:block}
+.cell .lbl{font-size:8.5px;color:var(--ink-mute);display:flex;
+  justify-content:space-between;gap:4px}
+.cell .kind{font-size:8px;color:var(--attention)}
+
+.heat-wrap{position:relative;padding:0 0 22px 46px}
+.heat{width:100%;aspect-ratio:1;image-rendering:pixelated;border:1px solid var(--line);
+  border-radius:4px;display:block;cursor:crosshair}
+.axis{position:absolute;display:flex;font-size:8.5px;color:var(--ink-mute);
+  overflow:hidden}
+.axis-y{left:0;top:0;bottom:22px;width:42px;flex-direction:column;
+  align-items:flex-end;justify-content:space-between;text-align:right}
+.axis-x{left:46px;right:0;bottom:0;height:20px;justify-content:space-between}
+.axis span{white-space:nowrap;overflow:hidden;max-width:42px}
+.readout{margin:10px 0 0;font-size:11.5px;color:var(--ink-mid);min-height:17px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 16px;margin-top:12px}
+.stat-row{display:flex;justify-content:space-between;font-size:10.5px;
+  border-bottom:1px solid var(--line);padding-bottom:4px}
+.stat-row span{color:var(--ink-mute)}
+.stat-row b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.lens{display:flex;gap:0;overflow-x:auto;padding-bottom:4px}
+.depth{flex:1;min-width:98px;display:flex;flex-direction:column;align-items:center;
+  gap:6px;padding:0 5px;position:relative}
+.depth + .depth::before{content:"";position:absolute;left:-4px;top:26px;width:8px;
+  height:1px;background:var(--line-strong)}
+.depth .d-label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-mute)}
+.depth .d-tok{width:100%;border:1px solid var(--line);border-radius:7px;
+  background:var(--ground);padding:9px 6px;text-align:center;font-size:16px;
+  font-weight:500}
+.depth .d-prob{font-size:10.5px;color:var(--ink-mute);font-variant-numeric:tabular-nums}
+.depth .d-bar{width:100%;height:3px;background:var(--surface-2);border-radius:2px;
+  overflow:hidden}
+.depth .d-bar i{display:block;height:100%;background:var(--attention)}
+.depth.final .d-tok{border-color:var(--attention);
+  box-shadow:0 0 0 2px rgba(var(--attention-rgb),.2)}
+
+.preds{display:flex;flex-direction:column;gap:5px}
+.pred{display:grid;grid-template-columns:56px 1fr 54px;align-items:center;gap:10px;
+  font-size:12px}
+.pred .p-tok{border:1px solid var(--line);border-radius:5px;background:var(--ground);
+  padding:3px 0;text-align:center;font-weight:500}
+.pred .p-bar{height:8px;background:var(--surface-2);border-radius:3px;overflow:hidden}
+.pred .p-bar i{display:block;height:100%;background:var(--attention)}
+.pred .p-val{text-align:right;font-size:11px;color:var(--ink-mute);
+  font-variant-numeric:tabular-nums}
+
+.gen-wrap{max-width:900px;margin:0 auto}
+.gen-note{display:block;line-height:1.7;text-transform:none;letter-spacing:0;
+  font-size:11.5px;margin-bottom:14px}
+.gen-meta{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;font-size:11px;
+  color:var(--ink-mute)}
+.gen-meta b{color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
+.gen-out{margin:0;padding:20px 22px;border:1px solid var(--line);border-radius:12px;
+  background:var(--surface);font-size:13px;line-height:1.75;white-space:pre-wrap;
+  color:var(--ink-mid);min-height:220px}
+.gen-out b{color:var(--ink);font-weight:500}
+.busy{color:var(--ink-mute);font-style:italic}
+
+/* ------------------------------------------------------------- status */
+/* Which build this is. A recorded answer and a live one look identical on the
+   page, so the difference has to be stated rather than inferred. */
+.status{display:inline-flex;align-items:center;gap:8px;margin:14px auto 0;
+  padding:5px 13px;border:1px solid var(--line);border-radius:20px;
+  background:var(--surface);font-size:10.5px;color:var(--ink-mute);
+  letter-spacing:.04em}
+.status i{width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-mute)}
+.status[data-mode="live"] i{background:#2e7d4f;
+  box-shadow:0 0 0 3px rgba(46,125,79,.16)}
+.status[data-mode="static"] i{background:#b07a12;
+  box-shadow:0 0 0 3px rgba(176,122,18,.16)}
+.mast .status{display:flex;width:max-content}
+
+/* -------------------------------------------------------- themed select */
+/* A native select paints its list with operating-system chrome that no
+   stylesheet can reach, so the popup never matched anything else on the page.
+   The real element stays in the DOM, hidden but functional, and this draws
+   over it — so .value and change events keep working exactly as before. */
+.sel{position:relative;display:inline-flex}
+.sel select{position:absolute;inset:0;opacity:0;pointer-events:none;width:100%}
+.sel-btn{display:flex;align-items:center;gap:10px;width:100%;
+  border:1px solid var(--line);border-radius:8px;background:var(--ground);
+  padding:9px 12px;font-size:12px;color:var(--ink);text-align:left}
+.sel-btn:hover{border-color:var(--line-strong)}
+.sel[data-open="true"] .sel-btn{border-color:var(--ink)}
+.sel-btn .v{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sel-btn .c{font-size:8px;color:var(--ink-mute);transition:transform .18s}
+.sel[data-open="true"] .sel-btn .c{transform:rotate(180deg)}
+.sel-list{position:absolute;top:calc(100% + 5px);left:0;min-width:100%;
+  background:var(--ground);border:1px solid var(--line-strong);border-radius:9px;
+  box-shadow:0 12px 30px -12px rgba(0,0,0,.28);padding:5px;z-index:40;
+  max-height:280px;overflow-y:auto;display:none}
+.sel[data-open="true"] .sel-list{display:block}
+.sel-list button{display:block;width:100%;text-align:left;background:none;border:0;
+  border-radius:6px;padding:7px 10px;font-size:12px;color:var(--ink-mid);
+  white-space:nowrap}
+.sel-list button:hover{background:var(--surface-2);color:var(--ink)}
+.sel-list button[aria-selected="true"]{background:var(--ink);color:var(--ground)}
