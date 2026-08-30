@@ -1,12 +1,11 @@
 # glassbox
 
-**A language model you can see inside.**
+**A transformer built from first principles, to understand it.**
 
-A GPT built from first principles in pure PyTorch — no HuggingFace, no
-abstractions until every line underneath is owned — grown phase by phase
-into a modern Llama-style architecture, trained for real, fine-tuned with
-LoRA written from scratch, and finished with an interactive visualizer
-that shows you exactly what every attention head is doing.
+Attention, normalisation, positional encoding, the tokeniser, the training
+loop, the sampler, the KV cache — written from scratch in pure PyTorch so that
+every line can be explained, tested and watched while it runs. Then an
+interactive visualiser that shows what each attention head is actually doing.
 
 **[Open the live demo →](https://udit-rawat.github.io/glassbox/)**
 
@@ -15,12 +14,36 @@ that shows you exactly what every attention head is doing.
 *Thirty-six attention heads from a model trained from scratch, each one a real
 map of where it looked. Sorted by behaviour, labelled by what they do.*
 
+## What this is, and what it isn't
+
+**It is a rebuild, not a scale result.** The models are small on purpose: 2.7M
+parameters on Tiny Shakespeare, 11M on TinyStories, 49 minutes on a free T4.
+The architecture is Llama-*shaped* — RMSNorm, RoPE, SwiGLU, grouped-query
+attention — but nowhere near Llama-*sized*, and nothing here should be read as
+a competitive number. The goal was to own every line, not to win on scale.
+
+**The dataset path is the well-trodden one.** Tiny Shakespeare then TinyStories
+is the standard route for this genre of project, close to the nanoGPT path. The
+problem selection here is not original; the execution is where the work went —
+the controlled ablation, 194 behavioural tests, and a diagram generated from
+the config rather than drawn.
+
+**Half the commercially useful work is still missing.** Phase 4 — LoRA and
+adapting a real pretrained model — is not built yet. Training a small model
+from scratch demonstrates that the internals are understood. Adapting a large
+existing one is closer to what the work actually looks like in practice, and
+that half is open.
+
+**No HuggingFace, until Phase 4.** That is a learning constraint, not a claim
+about good practice. Nobody should write their own BPE tokeniser at work. The
+point was to be unable to hide behind an abstraction while learning what it
+does; Phase 4 is where the real libraries come in.
+
 ## Why "glassbox"
 
-Most language models are black boxes. This one was built so that every
-component — attention, normalization, positional encoding, the tokenizer,
-the training loop, the fine-tuning adapters — can be opened, read, tested,
-and watched while it runs. The opposite of a black box.
+Most language models are black boxes. This one is built so every component can
+be opened, read, tested, and watched while it runs — which is what the
+visualiser is for. The opposite of a black box.
 
 ## Progress
 
@@ -35,14 +58,38 @@ and watched while it runs. The opposite of a black box.
   with 12% fewer parameters. KV cache still outstanding.*
 - [x] **Phase 3 — A real training run.** TinyStories with mixed precision,
   gradient accumulation, cosine LR schedule, and crash-safe checkpointing.
-  *11M parameters, 133M tokens, validation loss 1.5787 — perplexity 4.8
-  against a 4,096-token vocabulary. 49 minutes on a T4.*
+  *11M parameters, 133M tokens, validation loss 1.5787 — perplexity 4.8,
+  against 39.5 for a bigram on the same data. 49 minutes on a free T4.*
 - [ ] **Phase 4 — Fine-tuning a real model.** LoRA implemented from
   scratch (~80 lines), then instruction-tuning a real pretrained model.
+  *Not started. The most directly applicable phase, and the one still open.*
 - [x] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
   *Plus an architecture diagram generated from the config, with the Phase 2
   switches as live toggles.*
+
+## Reading the numbers
+
+A validation loss means nothing on its own. `scripts/baselines.py` measures what
+the same data costs under models that require no learning at all, using the same
+BPE tokeniser and the same held-out split, so the trained model can be read
+against something rather than against nothing.
+
+| | loss | perplexity |
+|---|---|---|
+| uniform over the 4,096-token vocabulary | 8.3178 | 4096.0 |
+| unigram — token frequency alone | 6.0260 | 414.0 |
+| bigram — the previous token only | 3.6774 | 39.5 |
+| **glassbox, 11M parameters** | **1.5787** | **4.8** |
+
+So the model is **8.2× lower perplexity than a bigram**, which is the honest
+statement of what it learned. What it is *not* is calibrated against published
+TinyStories models of comparable size — that comparison would be the next
+useful anchor and has not been done.
+
+```bash
+python scripts/baselines.py
+```
 
 ## Phase 5 — the visualizer
 
