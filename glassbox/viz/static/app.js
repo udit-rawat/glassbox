@@ -539,7 +539,6 @@ function measureBar() {
 addEventListener("resize", measureBar);
 addEventListener("load", measureBar);
 
-boot();
 
 /* ===================================================== activations & generate
 
@@ -912,3 +911,9 @@ function bindViews(models, dflt) {
     renderGrid();
   });
 }
+
+/* Called last, after every declaration above it. It used to sit mid-file and
+   worked only because boot() awaited a fetch before touching anything declared
+   below — an accident that held on the server and broke the moment the static
+   build answered from memory with no await in the way. */
+boot();
