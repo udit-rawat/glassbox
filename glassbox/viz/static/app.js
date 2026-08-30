@@ -46,7 +46,33 @@ const fmt = (n) => n.toLocaleString("en-US");
 const settable = (cfg) =>
   Object.fromEntries(Object.entries(cfg).filter(([k]) => SETTABLE.has(k)));
 
+/* Baked mode. A page on GitHub Pages has no Python behind it, so a static
+   build inlines pre-computed answers and this stands in for the server. The
+   architecture view is exhaustive — every combination of the four switches is
+   baked — while inspection and generation offer a curated set of prompts,
+   because those need a real forward pass to answer anything else. */
+const BAKED = typeof window !== "undefined" && window.GLASSBOX_DATA;
+
+const bakeKey = (path, body) => {
+  if (path === "/architecture") {
+    const c = body.config || {};
+    return ["norm", "activation", "pos_encoding", "n_kv_heads"]
+      .map((k) => `${k}=${c[k]}`).join("|");
+  }
+  return `${body.model}|${body.prompt}`;
+};
+
 async function post(path, body) {
+  if (BAKED) {
+    const table = BAKED[path.slice(1)] || {};
+    const hit = table[bakeKey(path, body)];
+    if (hit) return hit;
+    throw new Error(
+      path === "/architecture"
+        ? "that combination was not baked into this static build"
+        : "this demo has pre-computed answers only — pick one of the example "
+          + "prompts, or run the server locally for anything else");
+  }
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -60,7 +86,12 @@ async function post(path, body) {
 /* ------------------------------------------------------------- startup */
 
 async function boot() {
-  const meta = await (await fetch("/meta")).json();
+  // ?view= and #view make each panel linkable — how the README images are
+  // captured, and how someone can point at one directly.
+  const wanted = new URLSearchParams(location.search).get("view")
+                 || location.hash.replace("#", "");
+
+  const meta = BAKED ? BAKED.meta : await (await fetch("/meta")).json();
   const model = meta.models.find((m) => m.name === meta.default) || meta.models[0];
 
   if (model) {
@@ -79,9 +110,11 @@ async function boot() {
 
   buildKvOptions();
   bindControls();
+  bindViews(meta.models, meta.default || (meta.models[0] || {}).name);
   $("#play").addEventListener("click", walkthrough);
   await refresh();
   measureBar();
+  if (["activations", "generate"].includes(wanted)) setMode(wanted);
 }
 
 /* Grouped query attention assigns query heads to key/value heads in equal
@@ -507,3 +540,375 @@ addEventListener("resize", measureBar);
 addEventListener("load", measureBar);
 
 boot();
+
+/* ===================================================== activations & generate
+
+   The architecture view describes what the model *is*. These two describe what
+   it *does* with a particular prompt: where each head looks, what the model
+   would predict if it stopped at each layer, and what it actually says. */
+
+const act = {
+  data: null,        // last /inspect payload
+  position: null,    // which token is being read
+  head: null,        // {layer, head}
+  sort: "layer",
+  models: [],
+};
+
+/* Attention as an image. One pixel per (query, key) pair drawn at native size
+   and scaled up by CSS, which is far cheaper than thousands of rectangles and
+   keeps the grid crisp rather than blurred. */
+function drawHeat(canvas, matrix) {
+  const T = matrix.length;
+  canvas.width = T;
+  canvas.height = T;
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(T, T);
+  const [r, g, b] = [18, 96, 127];          // the attention hue
+  for (let i = 0; i < T; i++) {
+    for (let j = 0; j < T; j++) {
+      // Attention is dominated by a few large weights, so a linear ramp shows
+      // the diagonal and nothing else. The gamma lifts the quiet structure.
+      const v = Math.pow(Math.min(1, matrix[i][j]), 0.42);
+      const o = (i * T + j) * 4;
+      img.data[o] = 255 - (255 - r) * v;
+      img.data[o + 1] = 255 - (255 - g) * v;
+      img.data[o + 2] = 255 - (255 - b) * v;
+      img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function sortedHeads() {
+  const heads = [...act.data.heads];
+  if (act.sort === "layer") return heads;
+  return heads.sort((a, b) => b[act.sort] - a[act.sort]);
+}
+
+function renderGrid() {
+  const host = $("#grid");
+  host.innerHTML = "";
+  sortedHeads().forEach((h) => {
+    const cell = document.createElement("button");
+    cell.className = "cell";
+    cell.setAttribute("aria-pressed",
+      String(act.head && act.head.layer === h.layer && act.head.head === h.head));
+    cell.innerHTML = `<canvas></canvas>
+      <div class="lbl"><span>L${h.layer}·H${h.head}</span>
+        <span class="kind">${h.kind}</span></div>`;
+    drawHeat(cell.querySelector("canvas"), act.data.attention[h.layer][h.head]);
+    cell.addEventListener("click", () => selectHead(h.layer, h.head));
+    host.appendChild(cell);
+  });
+}
+
+function selectHead(layer, head) {
+  act.head = { layer, head };
+  const stats = act.data.heads.find((h) => h.layer === layer && h.head === head);
+  const matrix = act.data.attention[layer][head];
+  const tokens = act.data.tokens;
+
+  $("#head-cap").textContent = `layer ${layer} · head ${head} · ${stats.kind}`;
+  drawHeat($("#heat"), matrix);
+
+  // Only a few labels, evenly spaced — one per token is unreadable past a dozen.
+  const ticks = (n) => {
+    const step = Math.max(1, Math.ceil(tokens.length / n));
+    return tokens.filter((_, i) => i % step === 0);
+  };
+  $("#heat-axis-y").innerHTML = ticks(9).map((t) =>
+    `<span title="query ${t.position}">${t.display}</span>`).join("");
+  $("#heat-axis-x").innerHTML = ticks(9).map((t) =>
+    `<span title="key ${t.position}">${t.display}</span>`).join("");
+
+  $("#head-stats").innerHTML = [
+    ["mean distance", stats.mean_distance.toFixed(2)],
+    ["previous token", stats.previous_token.toFixed(3)],
+    ["diagonal", stats.diagonal.toFixed(3)],
+    ["entropy", stats.entropy.toFixed(2)],
+  ].map(([k, v]) => `<div class="stat-row"><span>${k}</span><b>${v}</b></div>`).join("");
+
+  const heat = $("#heat");
+  heat.onmousemove = (e) => {
+    const r = heat.getBoundingClientRect();
+    const j = Math.min(tokens.length - 1,
+      Math.floor(((e.clientX - r.left) / r.width) * tokens.length));
+    const i = Math.min(tokens.length - 1,
+      Math.floor(((e.clientY - r.top) / r.height) * tokens.length));
+    const w = matrix[i][j];
+    $("#readout").textContent = j > i
+      ? `${tokens[i].display} cannot see ${tokens[j].display} — it comes later`
+      : `${tokens[i].display} → ${tokens[j].display}  ·  ${(w * 100).toFixed(1)}%`;
+  };
+  heat.onmouseleave = () => {
+    $("#readout").textContent = "hover the map to read a weight";
+  };
+  renderGrid();
+}
+
+function renderLens() {
+  const host = $("#lens");
+  const pos = act.position;
+  const token = act.data.tokens[pos];
+  $("#lens-cap").textContent =
+    `logit lens · what would be predicted after "${token.display}" at each depth`;
+
+  host.innerHTML = "";
+  act.data.lens.forEach((depth, i) => {
+    const top = depth.positions[pos][0];
+    const el = document.createElement("div");
+    el.className = "depth" + (i === act.data.lens.length - 1 ? " final" : "");
+    el.innerHTML = `
+      <span class="d-label">${depth.label}</span>
+      <div class="d-tok"></div>
+      <div class="d-bar"><i style="width:${(top.prob * 100).toFixed(1)}%"></i></div>
+      <span class="d-prob">${(top.prob * 100).toFixed(1)}%</span>`;
+    el.querySelector(".d-tok").textContent = top.display;
+    host.appendChild(el);
+  });
+}
+
+function renderPreds() {
+  const pos = act.position;
+  const token = act.data.tokens[pos];
+  const top = act.data.lens[act.data.lens.length - 1].positions[pos];
+  $("#pred-cap").textContent = `next token after "${token.display}"`;
+
+  const host = $("#preds");
+  host.innerHTML = "";
+  const max = top[0].prob || 1;
+  top.forEach((t) => {
+    const el = document.createElement("div");
+    el.className = "pred";
+    el.innerHTML = `<span class="p-tok"></span>
+      <span class="p-bar"><i style="width:${(t.prob / max * 100).toFixed(1)}%"></i></span>
+      <span class="p-val">${(t.prob * 100).toFixed(2)}%</span>`;
+    el.querySelector(".p-tok").textContent = t.display;
+    host.appendChild(el);
+  });
+}
+
+function selectPosition(i) {
+  act.position = i;
+  document.querySelectorAll(".tok").forEach((t, n) =>
+    t.setAttribute("aria-pressed", String(n === i)));
+  renderLens();
+  renderPreds();
+}
+
+function renderTokens() {
+  const host = $("#tokens");
+  host.innerHTML = "";
+  act.data.tokens.forEach((t, i) => {
+    const el = document.createElement("button");
+    el.className = "tok";
+    el.textContent = t.display;
+    el.addEventListener("click", () => selectPosition(i));
+    host.appendChild(el);
+  });
+}
+
+async function runInspect() {
+  const button = $("#ins-run");
+  button.disabled = true;
+  button.textContent = "…";
+  try {
+    act.data = await post("/inspect", {
+      model: $("#ins-model").value,
+      prompt: $("#ins-prompt").value.replace(/\\n/g, "\n"),
+      top_k: 8,
+    });
+    renderTokens();
+    // The last position is the interesting one: it is the token the model is
+    // being asked to continue from.
+    selectPosition(act.data.tokens.length - 1);
+    act.head = null;
+    renderGrid();
+    selectHead(act.data.n_layers - 1, 0);
+  } catch (err) {
+    $("#tokens").innerHTML = `<span class="cap">${err.message}</span>`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "inspect";
+  }
+}
+
+async function runGenerate() {
+  const button = $("#gen-run");
+  const out = $("#gen-out");
+  button.disabled = true;
+  button.textContent = "…";
+  out.className = "gen-out busy";
+  out.textContent = "generating…";
+  try {
+    const data = await post("/generate", {
+      model: $("#gen-model").value,
+      prompt: $("#gen-prompt").value.replace(/\\n/g, "\n"),
+      max_tokens: 260, temperature: 0.8, top_k: 40, seed: 1337,
+    });
+    out.className = "gen-out";
+    out.innerHTML = "";
+    out.append(Object.assign(document.createElement("b"), { textContent: data.prompt }));
+    out.append(document.createTextNode(data.completion));
+    const entry = act.models.find((m) => m.name === data.model);
+    $("#gen-meta").innerHTML = `
+      <span>${data.label}</span>
+      <span>val loss <b>${data.val_loss.toFixed(4)}</b></span>
+      <span>parameters <b>${fmt(entry ? entry.params : 0)}</b></span>
+      <span>seed <b>1337</b></span>`;
+  } catch (err) {
+    out.className = "gen-out";
+    out.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "generate";
+  }
+}
+
+/* Free text cannot be answered without a forward pass, so a static build
+   swaps each prompt box for the list of prompts it actually holds. Better to
+   offer what exists than to accept anything and fail. */
+/* Recorded answers and live ones look identical once rendered, so which build
+   this is has to be said out loud. */
+function renderStatus() {
+  const el = $("#status");
+  el.dataset.mode = BAKED ? "static" : "live";
+  el.querySelector("span").textContent = BAKED
+    ? "static build · the diagram is computed live, the activations were recorded ahead of time"
+    : "live server · every view runs a real forward pass";
+}
+
+function makePromptPickers() {
+  const promptsOf = (table) =>
+    [...new Set(Object.keys(BAKED[table] || {}).map((k) => k.split("|")[1]))];
+
+  [["#ins-prompt", "inspect"], ["#gen-prompt", "generate"]].forEach(([sel, table]) => {
+    const input = $(sel);
+    const picker = document.createElement("select");
+    picker.id = input.id;
+    picker.setAttribute("aria-label", "prompt");
+    promptsOf(table).forEach((prompt) => {
+      const opt = document.createElement("option");
+      opt.value = prompt;
+      opt.textContent = prompt.replace(/\n/g, "⏎");
+      picker.appendChild(opt);
+    });
+    picker.style.flex = "1";
+    input.replaceWith(picker);
+  });
+
+  document.querySelectorAll(".gen-note, .act-tokens .cap").forEach((el, i) => {
+    if (i === 0) el.textContent = "a static build: these answers were computed "
+      + "ahead of time. clone the repo and run the server for arbitrary prompts.";
+  });
+}
+
+/* A select's popup is drawn by the operating system and cannot be styled, so
+   this draws one that can. The native element stays in the DOM, hidden but
+   live, which means .value and change events behave exactly as before and
+   nothing downstream has to know. */
+function themeSelect(select) {
+  const wrap = document.createElement("div");
+  wrap.className = "sel";
+  wrap.dataset.open = "false";
+  select.replaceWith(wrap);
+  wrap.appendChild(select);
+
+  const button = document.createElement("button");
+  button.className = "sel-btn";
+  button.innerHTML = '<span class="v"></span><span class="c">▼</span>';
+  const list = document.createElement("div");
+  list.className = "sel-list";
+  wrap.append(button, list);
+
+  const label = () => {
+    const opt = select.selectedOptions[0];
+    button.querySelector(".v").textContent = opt ? opt.textContent : "";
+    list.querySelectorAll("button").forEach((b) =>
+      b.setAttribute("aria-selected", String(b.dataset.value === select.value)));
+  };
+
+  [...select.options].forEach((opt) => {
+    const item = document.createElement("button");
+    item.dataset.value = opt.value;
+    item.textContent = opt.textContent;
+    item.addEventListener("click", () => {
+      select.value = opt.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      wrap.dataset.open = "false";
+      label();
+    });
+    list.appendChild(item);
+  });
+
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = wrap.dataset.open === "true";
+    document.querySelectorAll(".sel").forEach((s) => (s.dataset.open = "false"));
+    wrap.dataset.open = String(!open);
+  });
+  addEventListener("click", () => (wrap.dataset.open = "false"));
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape") wrap.dataset.open = "false";
+  });
+
+  label();
+  return wrap;
+}
+
+function setMode(mode) {
+  document.querySelectorAll("#modes button").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+  document.querySelector("main").hidden = mode !== "architecture";
+  document.querySelector('.bar[data-for="architecture"]').hidden = mode !== "architecture";
+  document.querySelectorAll(".view").forEach((v) =>
+    v.hidden = v.dataset.view !== mode);
+  history.replaceState(null, "",
+    mode === "architecture" ? location.pathname : `?view=${mode}`);
+  if (mode === "activations" && !act.data) runInspect();
+  if (mode !== "architecture") stop();
+  scheduleSignal();
+}
+
+function bindViews(models, dflt) {
+  act.models = models;
+  ["#ins-model", "#gen-model"].forEach((sel) => {
+    const el = $(sel);
+    el.innerHTML = "";
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.name;
+      opt.textContent = `${m.name} · ${m.label}`;
+      el.appendChild(opt);
+    });
+    el.value = dflt;
+  });
+
+  if (BAKED) makePromptPickers();
+  document.querySelectorAll(".prompt-bar select").forEach(themeSelect);
+  renderStatus();
+
+  $("#modes").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (b) setMode(b.dataset.mode);
+  });
+  $("#ins-run").addEventListener("click", runInspect);
+  $("#gen-run").addEventListener("click", runGenerate);
+  const onEnter = (sel, run) => {
+    const el = $(sel);
+    el.addEventListener("keydown", (e) => e.key === "Enter" && run());
+    if (el.tagName === "SELECT") el.addEventListener("change", run);
+  };
+  onEnter("#ins-prompt", runInspect);
+  onEnter("#gen-prompt", runGenerate);
+  $("#ins-model").addEventListener("change", runInspect);
+  document.querySelector(".sortby").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-sort]");
+    if (!b || !act.data) return;
+    act.sort = b.dataset.sort;
+    document.querySelectorAll(".sortby button").forEach((x) =>
+      x.setAttribute("aria-pressed", String(x === b)));
+    renderGrid();
+  });
+}
