@@ -65,14 +65,15 @@ async function boot() {
 
   if (model) {
     state.base = settable(model.config);
-    $("#subtitle").textContent = `${model.label} · validation loss ${model.val_loss}`;
+    $("#model-name").textContent =
+      `${model.label} · val ${model.val_loss}`;
   } else {
     // The architecture view is built to work with nothing trained, so an empty
     // registry is a valid state rather than an error.
     state.base = { vocab_size: 65, block_size: 128, d_model: 192, n_layers: 6,
                    n_heads: 6, n_kv_heads: 6, norm: "layernorm",
                    activation: "gelu", pos_encoding: "learned", bias: true };
-    $("#subtitle").textContent = "no checkpoints loaded — architecture only";
+    $("#model-name").textContent = "no checkpoint loaded";
   }
   state.config = { ...state.base };
 
@@ -80,6 +81,7 @@ async function boot() {
   bindControls();
   $("#play").addEventListener("click", walkthrough);
   await refresh();
+  measureBar();
 }
 
 /* Grouped query attention assigns query heads to key/value heads in equal
@@ -451,7 +453,11 @@ function drawSignal() {
     && document.querySelector(`.card[data-id="${CSS.escape(state.selected)}"]`);
   const panel = $("#detail");
 
-  if (!card || !panel || getComputedStyle(panel).position !== "fixed") {
+  // Only in the wide layout, where the panel sits beside the diagram rather
+  // than above it. Checking the panel's position value was the earlier version
+  // of this and broke silently the moment it changed from fixed to sticky.
+  const beside = matchMedia("(min-width: 1380px)").matches;
+  if (!card || !panel || !beside || !state.selected) {
     svg.classList.remove("on");
     return;
   }
@@ -485,5 +491,19 @@ function scheduleSignal() {
 }
 addEventListener("scroll", scheduleSignal, { passive: true });
 addEventListener("resize", scheduleSignal);
+
+/* The bar wraps differently at different widths, so the panel is told where it
+   actually ends rather than assuming a height. */
+function measureBar() {
+  const bar = document.querySelector(".bar");
+  if (!bar) return;
+  // The bar is sticky at the top, so the panel has to begin below its height —
+  // not below where the bar happens to sit before the page is scrolled.
+  document.documentElement.style.setProperty(
+    "--bar-clear", `${Math.round(bar.getBoundingClientRect().height) + 22}px`);
+  scheduleSignal();
+}
+addEventListener("resize", measureBar);
+addEventListener("load", measureBar);
 
 boot();
