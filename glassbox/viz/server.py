@@ -60,6 +60,10 @@ class Router:
     # ------------------------------------------------------------- routing
 
     def handle(self, method: str, path: str, body: bytes = b""):
+        # The query string belongs to the page, not to the route. Without this
+        # a deep link such as /?view=activations misses the "/" route entirely
+        # and the server answers a 404 to a request for its own front page.
+        path = path.split("?", 1)[0].split("#", 1)[0] or "/"
         try:
             if method == "GET":
                 return self._get(path)

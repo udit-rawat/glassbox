@@ -268,3 +268,13 @@ def test_static_paths_cannot_escape_the_static_directory(router):
     # Localhost-only is not a reason to leave a traversal hole open.
     status, _ = call(router, "GET", "/static/../../../../etc/passwd")
     assert status in (403, 404)
+
+
+def test_query_strings_do_not_break_routing(router):
+    # Deep links carry state for the page in the query string; the router must
+    # look past it rather than treating it as part of the path.
+    assert call(router, "GET", "/meta?anything=1")[0] == 200
+    status, _, _ = router.handle("GET", "/?view=activations")
+    assert status in (200, 404)      # 404 only when no frontend is built
+    assert router.handle("GET", "/?view=activations")[0] == \
+           router.handle("GET", "/")[0]
