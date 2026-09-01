@@ -39,23 +39,18 @@ about good practice. Nobody should write their own BPE tokeniser at work. The
 point was to be unable to hide behind an abstraction while learning what it
 does; Phase 4 is where the real libraries come in.
 
-## Why "glassbox"
-
-Most language models are black boxes. This one is built so every component can
-be opened, read, tested, and watched while it runs — which is what the
-visualiser is for. The opposite of a black box.
-
 ## Progress
 
 - [x] **Phase 1 — Attention & the Transformer.** Scaled dot-product
   attention, multi-head attention, causal masking, a full GPT-style
   decoder trained char-level on Tiny Shakespeare.
-  *2.7M parameters, validation loss 4.17 → 1.50, ~16 min on an M1.*
+  *2.7M parameters, validation loss 4.17 → 1.5039, about 4 minutes on a
+  free T4.*
 - [x] **Phase 2 — Modern LLM internals.** RMSNorm, RoPE, SwiGLU, grouped
-  query attention, temperature/top-k/top-p sampling, and a BPE tokenizer
-  from scratch.
-  *Same data, same seed: validation loss 1.4813 against Phase 1's 1.4990,
-  with 12% fewer parameters. KV cache still outstanding.*
+  query attention, a KV cache, temperature/top-k/top-p sampling, and a BPE
+  tokenizer from scratch.
+  *Same data, same seed, one variable at a time: 1.4700 against Phase 1's
+  1.5039, with 12% fewer parameters. See the ablation below.*
 - [x] **Phase 3 — A real training run.** TinyStories with mixed precision,
   gradient accumulation, cosine LR schedule, and crash-safe checkpointing.
   *11M parameters, 133M tokens, validation loss 1.5787 — perplexity 4.8,
@@ -66,7 +61,38 @@ visualiser is for. The opposite of a black box.
 - [x] **Phase 5 — The visualizer.** Enter a prompt, watch attention heads
   light up per layer, inspect token-by-token next-token probabilities.
   *Plus an architecture diagram generated from the config, with the Phase 2
-  switches as live toggles.*
+  switches as live toggles. Arbitrary prompts need the local server; the
+  hosted demo answers from recordings.*
+
+## What each modern component is actually worth
+
+Six runs on Tiny Shakespeare, identical in every respect except one switch —
+same seed, same data, same iterations, float32 throughout so that differences
+of a few hundredths are not fp16 rounding. Biases stay on everywhere, including
+the combined run, so exactly four variables move.
+
+| variant | val loss | vs baseline | parameters |
+|---|---|---|---|
+| baseline — LayerNorm, GELU, learned, 6 kv | 1.5039 | — | 2,706,624 |
+| RMSNorm only | 1.5004 | −0.0035 | 2,704,128 |
+| SwiGLU only | 1.5085 | **+0.0045** | 2,708,160 |
+| RoPE only | 1.4749 | **−0.0290** | 2,682,048 |
+| 2 key/value heads only | 1.5055 | +0.0016 | 2,410,176 |
+| all four | **1.4700** | **−0.0339** | **2,384,640** |
+
+**RoPE does almost all of the work** — 0.0290 of a 0.0339 total. **SwiGLU alone
+is slightly worse** at this scale, which is a real negative result and stays in.
+**Grouped-query attention is free**: 0.0016 of loss, which is noise, for 11%
+fewer parameters. And the combination beats the sum of the parts by about
+0.008, so the switches are not independent.
+
+At this size these are small differences on a small corpus, and none of it
+transfers automatically to a model a thousand times larger. What it does show is
+the discipline: one variable at a time, held-out loss, negative results kept.
+
+```bash
+# notebooks/ablation_colab.ipynb — six runs, about 25 minutes on a free T4
+```
 
 ## Reading the numbers
 
@@ -90,6 +116,22 @@ useful anchor and has not been done.
 ```bash
 python scripts/baselines.py
 ```
+
+## How the training actually runs
+
+Nothing trains locally. Every run in this repo happened on a free Colab T4
+through the notebooks in `notebooks/`, which clone the repo, install it, mount
+Drive for checkpoints, and call the same scripts you would run by hand:
+
+| notebook | what it did |
+|---|---|
+| `train_colab.ipynb` | reproduced Phase 1 on Tiny Shakespeare |
+| `ablation_colab.ipynb` | the six-run ablation above |
+| `tinystories_colab.ipynb` | Phase 3, 20,000 iterations in 49 minutes |
+
+They are committed with their outputs, so the loss curves are readable without
+running anything. The scripts work locally too — the test suite runs on CPU in
+five seconds — but a laptop is for building and debugging here, not training.
 
 ## Phase 5 — the visualizer
 
@@ -205,8 +247,18 @@ python scripts/train_tinystories.py --max-iters 20000 --schedule cosine
 ## Phase 1 result
 
 A 2.7M-parameter decoder trained from scratch on Tiny Shakespeare, character
-level, on an M1 laptop. Validation loss falls from 4.17 — the loss of a uniform
-guess over 65 characters — to 1.50 in about sixteen minutes.
+level. Validation loss falls from 4.17 — the loss of a uniform guess over 65
+characters — to **1.5039**, in about four minutes on a free T4.
+
+That number has some history worth stating. The first run reached 1.4990, but a
+bug wrote its checkpoint over the wrong directory and destroyed it; the fix and
+a regression test are in the history. Reproducing it on a T4 gave 1.4949, and
+the figure above, 1.5039, comes from the ablation baseline — same architecture,
+current training loop, float32. **1.5039 is the one you can reproduce today**,
+and it is what Phase 2 is measured against.
+
+The loss curve and sample below are from the original run and predate a change
+to Adam's β₂ default, so the exact digits will differ slightly if you rerun it.
 
 ```
 iter   500  train 2.0469  val 2.1112
@@ -249,22 +301,30 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest tests/ -q              # 18 behavioural tests
+pytest tests/ -q                # 194 behavioural tests, ~5s on CPU
 python scripts/sanity_check.py  # untrained forward pass, shapes and loss
+python -m glassbox.viz.server   # the visualizer on localhost:8000
 ```
+
+Torch and numpy are the only dependencies. The visualizer is standard-library
+HTTP with a hand-written frontend — no framework and no build step.
 
 ## Layout
 
 ```
 glassbox/
-├── model/       # attention, blocks, the GPT — evolves Phase 1 → 2
-├── tokenizer/   # char-level, then BPE from scratch
-├── training/    # corpus, batching, the training loop
-├── sampling/    # greedy, temperature, top-k, top-p
-└── viz/         # the attention visualizer
-scripts/         # train, sample, sanity check
-tests/           # behavioural tests: causality, invariants, shapes
-notes/           # per-module notes: what it does and why it exists
+├── model/       # attention, rope, norms, feed-forward, the KV cache, the GPT
+├── tokenizer/   # char-level and BPE, both from scratch
+├── training/    # corpus, batching, memory-mapped tokens, the loop,
+│                #   precision selection, the LR schedule
+├── sampling/    # greedy, temperature, top-k, nucleus
+└── viz/         # diagram generator, head stats, inspection, model registry,
+                 #   stdlib server, and the frontend under static/
+scripts/         # prepare, train, sample, export, baselines, sanity check
+notebooks/       # the Colab runs, committed with their outputs
+docs/            # the built static page GitHub Pages serves
+tests/           # 194 behavioural tests
+notes/           # write-ups of the parts that were hardest to get right
 ```
 
 ## Design principles
@@ -273,9 +333,12 @@ notes/           # per-module notes: what it does and why it exists
   the visualizer is a rendering problem, not a refactor.
 - **Tests verify behavior, not execution.** Perturbing a future token
   must not change past outputs; that's causality, proven.
-- **Each phase ships on its own.** The repo is presentable at every tag.
-- **Every module carries a note** on what it does and why it exists
-  that way.
+- **Each phase ships on its own.** Phases 1 and 2 are tagged `v1-phase1` and
+  `v2-phase2`; 3 and 5 are on `main` and were never tagged.
+- **The hard parts are written up.** `notes/` covers attention, the block, the
+  copying bias, tokenisation and sampling — five write-ups, not one per module.
+  The rest of the reasoning lives in comments beside the code.
 
-Runs on Apple Silicon (MPS) with CPU fallback; heavier training runs on a
-free cloud GPU. Device-agnostic throughout.
+Device handling is automatic: CUDA, then MPS, then CPU. Mixed precision is
+CUDA-only by design — Apple Silicon has no hardware bfloat16 and its fp16
+kernels are not worth the risk, so MPS deliberately falls back to float32.
