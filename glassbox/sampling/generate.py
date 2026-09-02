@@ -42,8 +42,14 @@ def generate(
     top_k: int | None = None,
     top_p: float | None = None,
     use_cache: bool = True,
+    eos_id: int | None = None,
 ) -> torch.Tensor:
-    """Extend each sequence in idx by max_new_tokens, sampling one token at a time."""
+    """Extend each sequence in idx by max_new_tokens, sampling one token at a time.
+
+    With eos_id set, a row stops contributing once it emits that token. This is
+    what an instruction-tuned model needs: a base model has no reason to ever
+    stop, so without it the answer runs on into whatever comes next.
+    """
     # Dropout must be off while generating, but silently leaving the model in
     # eval mode afterwards would disable it for the rest of training. The
     # previous mode is restored on the way out.
@@ -51,6 +57,10 @@ def generate(
     model.eval()
 
     cache = KVCache(model.config.n_layers) if use_cache else None
+
+    # Rows finish at different times but the tensor has to stay rectangular, so
+    # a finished row keeps emitting its stop token rather than being removed.
+    finished = torch.zeros(idx.size(0), dtype=torch.bool, device=idx.device)
 
     try:
         for _ in range(max_new_tokens):
@@ -94,7 +104,18 @@ def generate(
                 probs = F.softmax(logits, dim=-1)
                 next_id = torch.multinomial(probs, num_samples=1)
 
+            if eos_id is not None:
+                next_id = torch.where(
+                    finished.unsqueeze(1),
+                    torch.full_like(next_id, eos_id),
+                    next_id,
+                )
+                finished |= next_id.squeeze(1) == eos_id
+
             idx = torch.cat([idx, next_id], dim=1)
+
+            if eos_id is not None and bool(finished.all()):
+                break
     finally:
         model.train(was_training)
 
