@@ -75,6 +75,7 @@ class GPT(nn.Module):
         return_attention: bool = False,
         return_hidden: bool = False,
         cache: KVCache | None = None,
+        ignore_index: int = -100,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         """(B, T) token ids -> (B, T, vocab_size) logits, optional loss, optional attention."""
         B, T = idx.shape
@@ -123,8 +124,13 @@ class GPT(nn.Module):
             # token at t+1, and the shift lives in how the batch is cut, not
             # here. Every position contributes a prediction, which is what makes
             # a decoder-only model train on T targets per sequence instead of 1.
+            # ignore_index is what makes instruction tuning possible: positions
+            # marked with it contribute nothing to the loss and nothing to the
+            # average. Scoring the prompt as well as the response would train
+            # the model to generate the questions too.
             loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.reshape(-1)
+                logits.view(-1, logits.size(-1)), targets.reshape(-1),
+                ignore_index=ignore_index,
             )
 
         return logits, loss, attentions
